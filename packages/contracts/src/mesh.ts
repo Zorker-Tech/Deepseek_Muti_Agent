@@ -185,8 +185,11 @@ export interface RunRecord {
   finishedAt?: string
   /** Exit code, when the run reached a process exit. */
   exitCode?: number
-  /** Classified error code and message, when the run failed. */
-  error?: { code: string; message: string }
+  /**
+   * Classified error code and message, when the run failed, plus the redacted tail of
+   * the agent's own output so the cause is diagnosable from the record alone.
+   */
+  error?: { code: string; message: string; output?: string }
   /** Counters useful for a list view without loading events. */
   counters: {
     events: number

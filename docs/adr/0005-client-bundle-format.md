@@ -48,6 +48,13 @@ exactly and keeping the dependency surface at the baseline minimum:
    and footer `return module.exports; } });` — byte-compatible with the in-tree emitter.
 5. **Exports**: the client entry exports `{ inject, apply }`; the harness's Loader
    activates `apply(ctx)` in the browser Cordis tree.
+   The banner also defines the CommonJS globals the bundle assigns its exports to:
+   `const module = { exports: {} }; const exports = module.exports;`. The harness's own
+   rolldown-based emitter supplies an equivalent; esbuild's CJS output does not, and
+   without it the factory throws `module is not defined` **at materialization** — the
+   plugin's whole UI disappears from the page while the host half keeps working and
+   reports nothing. This is why a structural check of the served bytes is not enough and
+   `scripts/verify-client-bundle.mjs` materializes the bundle instead.
 6. **Styles**: no CSS file, no bundler CSS pipeline. Each component-local stylesheet is a
    TypeScript string constant injected as a single `<style data-plugin="…">` element
    inside `apply`, registered with `ctx.effect` for disposal. All colors, radii,

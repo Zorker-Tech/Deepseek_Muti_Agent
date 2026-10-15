@@ -48,7 +48,7 @@ pnpm run build       # emits the host bundle, client bundle and MCP entry into p
 node scripts/verify-plugin.mjs   # loads the built bundle against a stub Cordis context and exercises all three surfaces
 ```
 
-One naming correction: the README and `docs/operations/install.md` call the last check `pnpm run verify:plugin`, but `package.json` defines no such script (its `verify` entry points at a `scripts/verify.mjs` that does not exist). The runnable command is `node scripts/verify-plugin.mjs` until the script entries are fixed.
+One naming correction: the README and `docs/operations/install.md` call the last check `pnpm run verify:client && pnpm run verify:plugin`, but `package.json` defines no such script (its `verify` entry points at a `scripts/verify.mjs` that does not exist). The runnable command is `node scripts/verify-plugin.mjs` until the script entries are fixed.
 
 ## Operation ids are a public surface
 

@@ -46,6 +46,23 @@ export const LAYOUT_CSS = `
 .ma-column { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .ma-spacer { flex: 1 1 auto; }
 .ma-muted { color: var(--dsw-alias-label-tertiary, inherit); }
+.ma-run-status {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ma-run-reason {
+  display: block;
+  max-width: 32ch;
+  overflow: hidden;
+  color: var(--dsw-alias-text-secondary, #6b7280);
+  font-size: var(--dsw-font-size-xs, 11px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ma-mono { font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
 .ma-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .ma-link {

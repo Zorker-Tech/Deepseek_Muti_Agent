@@ -249,7 +249,17 @@ export function MeshView(props: MeshViewProps): React.ReactElement {
     {
       id: 'status',
       label: t('mesh.column.status'),
-      render: record => <StatusPill {...runStatus(record.status, t)} />,
+      // A failed run shows the agent's own explanation beneath the pill: the classified
+      // code says an agent needed a sign-in, and the tail says which command to run.
+      render: record =>
+        record.error === undefined ? (
+          <StatusPill {...runStatus(record.status, t)} />
+        ) : (
+          <span className="ma-run-status" title={record.error.output ?? record.error.message}>
+            <StatusPill {...runStatus(record.status, t)} />
+            <span className="ma-run-reason">{record.error.output ?? record.error.message}</span>
+          </span>
+        ),
     },
     {
       id: 'elapsed',
@@ -290,7 +300,17 @@ export function MeshView(props: MeshViewProps): React.ReactElement {
     {
       id: 'status',
       label: t('mesh.column.status'),
-      render: record => <StatusPill {...runStatus(record.status, t)} />,
+      // A finished run explains itself the same way a live one does: the classified
+      // code says an agent needed a sign-in, and the tail says which command to run.
+      render: record =>
+        record.error === undefined ? (
+          <StatusPill {...runStatus(record.status, t)} />
+        ) : (
+          <span className="ma-run-status" title={record.error.output ?? record.error.message}>
+            <StatusPill {...runStatus(record.status, t)} />
+            <span className="ma-run-reason">{record.error.output ?? record.error.message}</span>
+          </span>
+        ),
     },
     {
       id: 'prompt',

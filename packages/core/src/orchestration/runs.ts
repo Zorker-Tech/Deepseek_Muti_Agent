@@ -373,7 +373,15 @@ export class RunManager {
       status: finalStatus,
       finishedAt,
       ...(result?.exitCode === undefined ? {} : { exitCode: result.exitCode }),
-      ...(result?.error === undefined ? {} : { error: { code: result.error.code, message: result.error.message } }),
+      ...(result?.error === undefined
+        ? {}
+        : {
+            error: {
+              code: result.error.code,
+              message: result.error.message,
+              ...(result.error.output === undefined ? {} : { output: result.error.output }),
+            },
+          }),
     }
     this.live.delete(String(id))
     this.releaseSlot()

@@ -104,9 +104,14 @@ async function buildMcp(minify) {
 /**
  * Build the browser bundle in the harness's closure-factory envelope.
  *
- * The banner/footer pair is byte-compatible with the harness's own client emitter; the
- * factory receives the module table's `require`, so every baseline word resolves to the
- * page's single instance.
+ * The envelope matches the harness's own client emitter, and the factory receives the
+ * module table's `require` so every baseline word resolves to the page's single instance.
+ *
+ * One addition the envelope alone does not provide: a `module` shim. A CJS bundle assigns
+ * its exports to `module.exports`, and unlike the harness's rolldown-based emitter — which
+ * supplies one — esbuild's CJS output expects the CommonJS globals to exist. Without the
+ * shim the factory throws `module is not defined` at materialization and the plugin's
+ * entire UI silently disappears from the page while the host half keeps working.
  */
 async function buildClient(minify) {
   await build({
@@ -124,7 +129,11 @@ async function buildClient(minify) {
     external: MODULE_TABLE_BASELINE,
     legalComments: 'none',
     logLevel: 'warning',
-    banner: { js: `window.__ModuleLoader__.load({ id: ${JSON.stringify(PACKAGE_NAME)}, factory: (require) => {` },
+    banner: {
+      js:
+        `window.__ModuleLoader__.load({ id: ${JSON.stringify(PACKAGE_NAME)}, factory: (require) => {` +
+        'const module = { exports: {} }; const exports = module.exports;',
+    },
     footer: { js: 'return module.exports; } });' },
   })
 }

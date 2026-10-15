@@ -21,7 +21,8 @@
     "install:plugin": "node scripts/install-into-profile.mjs",
     "clean": "node scripts/clean.mjs",
     "verify:plugin": "node scripts/verify-plugin.mjs",
-    "verify": "node scripts/verify-plugin.mjs"
+    "verify": "node scripts/verify-client-bundle.mjs && node scripts/verify-plugin.mjs",
+    "verify:client": "node scripts/verify-client-bundle.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

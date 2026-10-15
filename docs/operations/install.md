@@ -17,8 +17,13 @@ From a checkout of this repository:
 pnpm install
 pnpm run typecheck        # all seven packages
 pnpm run build            # packages/plugin/lib/{index.js,client.js,mcp-stdio.js}
-pnpm run verify:plugin    # registration + HTTP + MCP surfaces, no harness needed
+pnpm run verify:client     # the browser half: envelope, factory, slot registrations
+pnpm run verify:plugin     # registration + HTTP + MCP surfaces, no harness needed
 ```
+
+Run both, not just the host one. `verify:client` is what catches a bundle that is served
+correctly but throws when the page materializes it — a failure mode in which the host half
+looks perfectly healthy and the UI is simply absent.
 
 `verify:plugin` is the gate to trust before installing: it loads the built bundle against
 a stub context and asserts that tools, commands and routes register, that a
