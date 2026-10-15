@@ -30,6 +30,7 @@ import {
 } from '@zorker/muti-agent-control-plane'
 import { PLUGIN_VERSION } from '@zorker/muti-agent-contracts'
 import {
+  createSurfaceState,
   probeHarness,
   provideService,
   registerEffect,
@@ -139,11 +140,26 @@ export async function apply(
   const harness = probeHarness(ctx)
   state.harness = harness
 
+  const surfaces = createSurfaceState()
   const catalog = new OperationCatalog()
   const registrationContext: RegistrationContext = {
     pluginVersion: PLUGIN_VERSION,
-    harnessServices: harness.present,
-    missingSeams: harness.missing,
+    // Read at call time, not captured here: registration is reactive, so the effective
+    // surfaces change after activation.
+    surfaces: () => {
+      const mounted = new Set(surfaces.mounted)
+      const missing: { service: string, disables: string }[] = []
+      for (const [service, disables] of SURFACE_DISABLES) {
+        if (mounted.has(service)) continue
+        const failure = surfaces.failed.get(service)
+        missing.push(failure === undefined ? { service, disables } : { service, disables: `${disables} (registration failed: ${failure})` })
+      }
+      return {
+        services: [...mounted],
+        missing,
+        failed: [...surfaces.failed].map(([service, reason]) => ({ service, reason })),
+      }
+    },
   }
   registerOperations(catalog, registrationContext)
   const dispatcher = new Dispatcher(service, catalog)
@@ -154,7 +170,7 @@ export async function apply(
   // composition cannot decide whether the panel has data.
 
   // Surface A: native tools, so the harness's own agent can drive the mesh.
-  registerWhenAvailable(ctx, ['tools'], () => {
+  registerWhenAvailable(ctx, ['tools'], 'tools', surfaces, () => {
     const tools = ctx.get('tools') as { register(definition: unknown): () => void } | undefined
     if (tools === undefined) return
     for (const tool of buildTools(dispatcher)) {
@@ -164,7 +180,7 @@ export async function apply(
   })
 
   // Slash commands, so a user can act from the composer without leaving the keyboard.
-  registerWhenAvailable(ctx, ['commands'], () => {
+  registerWhenAvailable(ctx, ['commands'], 'commands', surfaces, () => {
     const commands = ctx.get('commands') as
       | { register(definition: { name: string, description: string, handler: (invocation: unknown) => Promise<unknown> }): () => void }
       | undefined
@@ -180,7 +196,7 @@ export async function apply(
   })
 
   // Surface B: the authenticated browser gateway.
-  registerWhenAvailable(ctx, ['connection'], () => {
+  registerWhenAvailable(ctx, ['connection'], 'connection', surfaces, () => {
     const connection = ctx.get('connection') as
       | { fetch?: { register(route: unknown): () => void } }
       | undefined
@@ -264,6 +280,19 @@ function schedule(
   timer.unref?.()
   state.timers.push(timer)
 }
+
+/**
+ * What each harness surface enables, for diagnostics.
+ *
+ * The label is the capability a user loses, not the service name, because that is the
+ * question "is anything missing?" actually asks.
+ */
+const SURFACE_DISABLES: readonly (readonly [string, string])[] = [
+  ['tools', 'native tools, so the harness agent cannot orchestrate other agents'],
+  ['commands', 'slash commands'],
+  ['connection', 'the browser gateway, so the GUI panels have no data source'],
+  ['terminal', 'opening an agent\'s own interactive UI from the panel'],
+]
 
 /** The slash commands the plugin contributes. */
 function buildCommands(

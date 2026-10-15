@@ -76,12 +76,17 @@ export async function createStdioService(env: NodeJS.ProcessEnv = process.env): 
   const catalog = new OperationCatalog()
   const context: RegistrationContext = {
     pluginVersion: '0.1.0',
-    harnessServices: [],
-    missingSeams: [
-      { service: 'connection', disables: 'the browser HTTP gateway (headless MCP only)' },
-      { service: 'tools', disables: 'native harness tools' },
-      { service: 'commands', disables: 'slash commands' },
-    ],
+    // The standalone server has no harness at all, so every surface is absent by
+    // construction rather than by failure.
+    surfaces: () => ({
+      services: [],
+      missing: [
+        { service: 'tools', disables: 'native tools (this is the standalone MCP server)' },
+        { service: 'commands', disables: 'slash commands (this is the standalone MCP server)' },
+        { service: 'connection', disables: 'the browser gateway (this is the standalone MCP server)' },
+      ],
+      failed: [],
+    }),
     ...(process.argv[1] === undefined ? {} : { mcpEntry: process.argv[1] }),
   }
   registerOperations(catalog, context)

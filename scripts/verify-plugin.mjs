@@ -149,6 +149,17 @@ if (rpcRoute !== undefined) {
   check(agentRows.length === 3, 'three agents are described', agentRows.map(row => row.agentId).join(','))
   const isolated = diagnostics.body?.result?.isolation
   check(isolated === 'worktree', 'isolation is reported as enabled', isolated)
+  // The reported surfaces must be the effective ones. A stub context has no `inject`, so
+  // registration happens inline and every surface must therefore be reported as mounted —
+  // a report that says otherwise is the stale-activation-snapshot defect.
+  const mountedSurfaces = diagnostics.body?.result?.harness?.services ?? []
+  check(mountedSurfaces.includes('tools'), 'diagnostics reports the tools surface as mounted', mountedSurfaces.join(','))
+  check(mountedSurfaces.includes('connection'), 'diagnostics reports the connection surface as mounted', mountedSurfaces.join(','))
+  check(
+    (diagnostics.body?.result?.harness?.failed ?? []).length === 0,
+    'no surface reported a registration failure',
+    JSON.stringify(diagnostics.body?.result?.harness?.failed),
+  )
   for (const row of agentRows) {
     notes.push(`${row.agentId}: installed=${String(row.installed)} ${row.version ?? ''}`.trim())
   }

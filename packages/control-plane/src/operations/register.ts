@@ -84,10 +84,20 @@ export interface McpConfigReport {
 export interface RegistrationContext {
   /** Plugin version string. */
   pluginVersion: string
-  /** Harness service names currently reachable, for diagnostics. */
-  harnessServices: readonly string[]
-  /** Seams that were absent, with what each disables. */
-  missingSeams: readonly { service: string, disables: string }[]
+  /**
+   * The effective harness surfaces, read when diagnostics are requested.
+   *
+   * A function rather than a snapshot: registration is reactive, so the surfaces that are
+   * up when a user asks is not the set that existed when the plugin activated.
+   */
+  surfaces: () => {
+    /** Surfaces that are mounted and serving. */
+    services: readonly string[]
+    /** Surfaces that are not mounted, with what each absence disables. */
+    missing: readonly { service: string, disables: string }[]
+    /** Surfaces whose registration threw, with the reason. */
+    failed: readonly { service: string, reason: string }[]
+  }
   /** Absolute path of the stdio MCP entry script, when the plugin knows it. */
   mcpEntry?: string
   /** Streamable HTTP endpoint, when the harness serves one. */
@@ -154,7 +164,7 @@ export function buildOperations(
         pluginVersion: context.pluginVersion,
         stateDir: ctx.service.stateRoot,
         isolation: ctx.service.worktrees === undefined ? 'shared-disabled' : 'worktree',
-        harness: { services: context.harnessServices, missing: context.missingSeams },
+        harness: context.surfaces(),
         agents: descriptors.map(entry => ({
           agentId: String(entry.descriptor.id),
           displayName: entry.descriptor.displayName,

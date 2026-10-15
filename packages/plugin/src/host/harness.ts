@@ -74,6 +74,27 @@ export interface TerminalService {
   }): Promise<unknown> | unknown
 }
 
+/**
+ * Which harness surfaces the plugin actually mounted.
+ *
+ * Registration is reactive (see {@link registerWhenAvailable}), so the set observed while
+ * `apply` was running is not the answer to "is the gateway up": `connection` frequently
+ * appears afterwards. Reporting the activation snapshot as if it were the effective state
+ * tells a user the browser panels have no data source while the panels are working, so the
+ * effective set is tracked here and read at diagnostics time, not captured once.
+ */
+export interface SurfaceState {
+  /** Surface names that have mounted. */
+  mounted: Set<string>
+  /** Surfaces whose registration threw, with the reason. */
+  failed: Map<string, string>
+}
+
+/** A fresh, empty surface state. */
+export function createSurfaceState(): SurfaceState {
+  return { mounted: new Set(), failed: new Map() }
+}
+
 /** What the harness offered at activation, and what each absence costs. */
 export interface HarnessCapabilities {
   tools: ToolsService | undefined
@@ -197,23 +218,36 @@ export function provideService(ctx: HarnessContext, name: string, value: unknown
  *
  * @param ctx - The Cordis context the plugin was applied with.
  * @param deps - Service names the registration needs.
+ * @param name - Surface name recorded in {@link SurfaceState}.
+ * @param state - Records what mounted, so diagnostics can report the effective state.
  * @param callback - The registration to perform.
  * @returns Whether a deferred mount was installed.
  */
 export function registerWhenAvailable(
   ctx: HarnessContext,
   deps: readonly string[],
+  name: string,
+  state: SurfaceState,
   callback: () => void,
 ): boolean {
+  const run = (): void => {
+    try {
+      callback()
+      state.mounted.add(name)
+    } catch (cause) {
+      state.failed.set(name, cause instanceof Error ? cause.message : String(cause))
+      throw cause
+    }
+  }
   if (typeof ctx.inject !== 'function') {
-    callback()
+    run()
     return false
   }
   try {
-    void ctx.inject(deps, callback)
+    void ctx.inject(deps, run)
     return true
   } catch {
-    callback()
+    run()
     return false
   }
 }
