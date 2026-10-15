@@ -1,0 +1,42 @@
+# MutiAgent — multi-agent control plane for DeepSeek Harness.
+#
+# One row: the package is both the Host plugin (services, tools, commands, browser
+# gateway) and the Client module (`dsh.client` in package.json), exactly as the
+# harness's own single-row UI packages are. Adding a second row would load the same
+# package twice.
+#
+# Configuration lives here rather than in code, so a deployment can change behaviour
+# from its profile without rebuilding (see the plugin's settings schema). Every field
+# is optional; the defaults suit a machine with all three agents installed.
+- insert:
+    - id: muti-agent
+      name: '@zorker/muti-agent-plugin'
+      config:
+        # Empty means `<harness home>/mutiagent`.
+        stateDir: ''
+        agents:
+          codex:
+            enabled: true
+          grok:
+            enabled: true
+          pi:
+            enabled: true
+        worktree:
+          # Delegated runs get their own git worktree, so parallel agents cannot
+          # overwrite each other's edits (ADR-0008).
+          enabled: true
+          location: in-repo
+          conflictPolicy: report
+          autoIntegrate: false
+          sampleIntervalMs: 30000
+        runs:
+          maxParallel: 4
+          historyLimit: 200
+        credentials:
+          # Reading an agent's own credential file is instant and works offline; the CLI
+          # probe is the fallback when the file is inconclusive.
+          probeCli: true
+        collaboration:
+          sharePlan: true
+        log:
+          level: info

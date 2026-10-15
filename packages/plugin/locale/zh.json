@@ -1,0 +1,10 @@
+{
+  "meta": {
+    "title": "MutiAgent",
+    "description": "把 Codex、Grok Build 与 Pi 统一到一套 schema、一个界面和一套编排运行时：按智能体分区的会话列表、在工作树中隔离的委派执行、共享的计划与待办看板，以及每个智能体的登录管理。"
+  },
+  "panel": {
+    "sessions": "智能体",
+    "mesh": "编排"
+  }
+}

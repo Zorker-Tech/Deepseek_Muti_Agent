@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Emitted build output. `pnpm run build` writes the host bundle, client bundle,
+# type declarations and the MCP entry into packages/*/lib; nothing under any lib/
+# directory is source, so the whole tree is ignored rather than a list of artifacts.
+lib/
+
+# TypeScript incremental build state (tsc -b)
+*.tsbuildinfo
+
+# Local runtime state: the harness profile/home used for testing, and MutiAgent's
+# own state directory when a run keeps it inside the repository.
+.dsh-home/
+.muti-agent/
+
+# Other build/coverage output
+dist/
+coverage/
+
+# Logs and OS/editor residue
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# Packed tarballs (pnpm pack / npm pack)
+*.tgz
+
+# Local environment files; real values never belong in the repository
+.env
+.env.*

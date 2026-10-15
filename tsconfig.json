@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/contracts" },
+    { "path": "packages/core" },
+    { "path": "packages/adapter-codex" },
+    { "path": "packages/adapter-grok" },
+    { "path": "packages/adapter-pi" },
+    { "path": "packages/control-plane" },
+    { "path": "packages/plugin" }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "name": "@zorker/muti-agent-control-plane",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MutiAgent control plane: the operation catalog and its three surfaces — native harness tools, an MCP server (stdio and streamable HTTP), and the authenticated HTTP+SSE gateway the GUI uses.",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./src/*": "./src/*"
+  },
+  "files": ["lib"],
+  "dependencies": {
+    "@zorker/muti-agent-contracts": "workspace:*",
+    "@zorker/muti-agent-core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@zorker/muti-agent-adapter-codex": "workspace:*",
+    "@zorker/muti-agent-adapter-grok": "workspace:*",
+    "@zorker/muti-agent-adapter-pi": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@zorker/muti-agent-adapter-codex": { "optional": true },
+    "@zorker/muti-agent-adapter-grok": { "optional": true },
+    "@zorker/muti-agent-adapter-pi": { "optional": true }
+  }
+}

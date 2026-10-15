@@ -1,0 +1,206 @@
+# `@zorker/muti-agent-adapter-pi`
+
+MutiAgent's adapter for **Pi** (`@earendil-works/pi-coding-agent`, bin `pi`,
+verified against pi 1.2.0). It implements the `AgentAdapter` SPI from
+`@zorker/muti-agent-core` and maps pi's own session store, event stream and credential
+store onto the canonical schema (ADR-0002, ADR-0003, ADR-0010, ADR-0012).
+
+```ts
+import { createPiAdapter } from '@zorker/muti-agent-adapter-pi'
+
+const adapter = createPiAdapter(ctx)
+await adapter.describe()
+await adapter.listSessions({ cwd: '/repo', limit: 20 })
+await adapter.run({ runId, cwd: '/repo', prompt, isolation: 'shared-cwd' })
+```
+
+## Capability declaration
+
+```ts
+{
+  runModes: ['headless-exec'],
+  streaming: true,
+  resume: true,
+  interrupt: false,
+  listSessions: true,
+  readTranscript: true,
+  nativeTodos: false,
+  nativePlan: false,
+  externalWorktree: false,
+  mcpClient: true,
+  listModels: true,
+  sandboxProfiles: [],
+  approvalModes: ['default', 'approve'],
+  credentials: { status: true, login: ['interactive'], logout: false },
+}
+```
+
+Transports: `headless-exec` → `pi --mode json` (available). `duplex-protocol` →
+`pi --mode rpc` (declared, **not implemented**): it needs a long-lived duplex session,
+which ADR-0003 makes a per-adapter opt-in, so it will land as its own change with
+correlation ids and lifecycle handling rather than as a second code path here.
+
+## Store layout, as this adapter resolves it
+
+| Concern | Source | Precedence |
+|---|---|---|
+| Agent dir | `config.homeDir`, `$PI_CODING_AGENT_DIR`, `~/.pi/agent` | 1, 2, 3 |
+| Session directory override | adapter `settings.sessionDir`, `$PI_CODING_AGENT_SESSION_DIR`, `sessionDir` in pi's `settings.json` | 1, 2, 3 |
+| Default root | `<agent-dir>/sessions` | — |
+| Session file | `<root>/--<flattened-cwd>--/<ISO timestamp with `:` and `.` as `-`>_<sessionId>.jsonl`, or directly in the override directory | — |
+
+One verified subtlety that shapes the code: `--session-dir` /
+`$PI_CODING_AGENT_SESSION_DIR` / pi's `sessionDir` is **not** a second root. It is the
+directory that directly holds session files, replacing the per-cwd subdirectory for every
+project, and pi's `listAll` reads it flat. This adapter therefore reads the override
+directory flat *and* the default root's subdirectories, because a machine that switched
+layouts keeps sessions in both places; pi's own listing with an override hides the
+default-root ones.
+
+There is no session index: enumeration is a directory scan. Scans are bounded
+(200 directories, 400 files per directory, 1500 files per scan) and the caps that were hit
+are reported as `ProjectionNote`s on the newest session.
+
+## Projection table
+
+### Session (`AgentSession`)
+
+| Canonical field | Pi source | Loss / note |
+|---|---|---|
+| `nativeId` | header `id` | none |
+| `key` | `pi:<id>` | none |
+| `nativePath` | the `.jsonl` file | none |
+| `title` | latest `session_info.name` (an empty name clears it) | a tail-only read can miss a title set earlier, because pi's own listing reads the whole file |
+| `titleIsNative` | `true` whenever `title` is set | a title-less session carries no `title` at all: deriving one from the first user message is the caller's choice, and this adapter never invents a native name |
+| `cwd` | header `cwd`, **authoritative** | the directory name is only a hint; a disagreement is noted |
+| `repoRoot` | — | not inferred: it needs a git call per session, so the orchestrator infers it once per distinct cwd |
+| `branch` | — | pi records no git branch |
+| `model` | latest `model_change.modelId`, else the last assistant message's `model` | pi also records a `provider`, which `AgentSession` has no field for |
+| `createdAt` | header `timestamp` | file mtime only when the header is unreadable |
+| `updatedAt` | latest user/assistant message time → header time → file mtime | exactly pi's own fallback order, restricted to the read window |
+| `status` | `idle`, `unreadable` (header unreadable) | `running` is MutiAgent's, `missing` is handled by the caller |
+| `messageCount` | `message` entries on the live branch | omitted when the file exceeded the read window |
+| `parentNativeId` | header `parentSession`, id recovered from the path | a path that yields no id is kept verbatim |
+| `source` | `pi`, or `pi:fork` when `parentSession` is set | pi records no explicit source |
+| `usage` | summed assistant-message usage plus standalone `usage` entries | pi keeps no session total; a truncated window makes it partial, and cache-write tokens have no canonical field |
+| `binding.runIds` | — | always empty: that is MutiAgent-side state |
+
+### Transcript (`AgentMessage`)
+
+| Native record | Canonical | Loss / note |
+|---|---|---|
+| `message` role `user`, content string or blocks | one `user`/`user` message, text blocks joined | image blocks are counted in a note; the canonical message has no image field |
+| `message` role `assistant`, content blocks | one message per block: `text` → `assistant`/`assistant`, `thinking` → `assistant`/`reasoning`, `toolCall` → `assistant`/`tool-call` with `input` = serialized arguments | multi-block entries get derived ids `entryId:blockIndex`; unknown block types are counted |
+| `message` role `toolResult` | `tool`/`tool-result` with `tool.output` and `failed` from `isError` | `id` is the native `toolCallId` |
+| `message` role `bashExecution` | `tool`/`tool-result`, tool `bash`, `input` = command | pi-only message kind |
+| `message` role `custom` / entry `custom_message` | `user` when `display` is true, else `system`; `nativeType` keeps the extension's `customType` | — |
+| `compaction`, `branch_summary` entries and their summary messages | `system`/`system` with the summary text | pi hides messages before `firstKeptEntryId` in its own context; the transcript shows the branch as recorded |
+| `context_edit` | **not applied** | recorded content is shown; edits are counted in a note |
+| `thinking_level_change`, `model_change`, `usage`, `label`, `session_info` | no message | state, folded into the session summary where canonical fields exist |
+| an entry type this reader does not model | no message | named in a note; a format revision degrades into a visible gap |
+| image blocks | — | counted and noted, never invented into text |
+
+Reading is branch-aware: the file is an append-only tree, so the live conversation is the
+chain that ends at the *last line* (that is where the next entry attaches). Entries on
+abandoned branches are excluded from the linear reading and counted in a note;
+`compaction` semantics are not applied, so the transcript stays a faithful record.
+
+### Auth (`AgentAuthState`)
+
+| Canonical field | Pi source | Loss / note |
+|---|---|---|
+| `status` | `auth.json`: usable `oauth` (`expires` in the future) or `api_key` entry → `authenticated`; only expired OAuth → `expired`; provider env var set → `authenticated`/`source: 'env'`; unparsable file → `misconfigured`; otherwise `unauthenticated` | pi refreshes an expired OAuth credential on the next request, so `expired` is not "logged out" |
+| `source` | `file`, `env`, `none` | `cli-probe` is unused: `pi auth check` costs a process start for what the file already says |
+| `method` | provider names and kinds, e.g. `anthropic(oauth), openai(api_key)` | a `!command` key is reported as `<provider>(command)`, never executed and never read |
+| `expiresAt` | latest OAuth `expires` among the classified entries | — |
+| `credentialPath` | `<agent-dir>/auth.json` | — |
+| `environmentKeys` | names from `PI_PROVIDER_ENV_VARS` that are set | names only; ambient sources pi resolves at request time (AWS IAM profiles, Google ADC) are intentionally absent, matching pi's own `findEnvKeys` |
+| `account`, `plan` | — | pi's store holds no such field; `pi auth check --json` is provider-dependent and is not called |
+| `detail` | which condition was observed, and that an env credential is only forwarded under the adapter's env rules | — |
+
+No credential value is ever read into a projection, logged, or placed in argv.
+
+## Why five things are absent
+
+- **Todos (none).** Pi has no todo tool: its built-in tools are `read`, `bash`,
+  `powershell`, `edit`, `write`, `grep`, `find`, `ls`. `readNativeTasks()` returns
+  `undefined` rather than pattern-matching extension `custom` entries: a list scraped out
+  of some third-party extension's private entry is not a native task model, and pretending
+  otherwise would make the shared board lie.
+- **Plan mode (none).** Pi's README says it "skips features like sub-agents and plan mode";
+  `--plan` exists only as an example extension flag.
+- **Sandbox (none).** Pi's README: "Pi does not include a built-in permission system"; it
+  runs with the launching user's permissions, and pi's answer is containerization.
+  `sandboxProfiles` is therefore empty, and a run request that names a profile is warned
+  about and ignored rather than silently dropped.
+- **Login / logout (unsupported, with guidance).** `/login` and `/logout` are TUI commands;
+  there is no non-interactive credential command, and this adapter never drives a TUI
+  (ADR-0003). Both operations return `ok: false` with instructions and a freshly observed
+  state — the settings page shows what to do instead of a dead button (ADR-0010). `pi auth
+  print-api-key` / `print-bearer-token` exist and are deliberately never called.
+- **Interrupt (`false`).** `cancel()` kills the managed process group; pi's `--mode json`
+  transport has no way to abort one turn and keep the session, so `interrupt` stays false
+  until the `--mode rpc` transport lands.
+
+## Running pi
+
+- **argv**: `pi --mode json`, plus `--session-id <id>` for a new run (MutiAgent generates a
+  uuid-v7-shaped id), `--session <file>` when resuming a session whose file was resolved,
+  `--session <id>` when only the id is known (pi's own lookup), `--provider`/`--model` when
+  a model is configured, and `--approve` when `approval` is `approve`. `default` approval
+  passes no flag, so pi's own trust store decides. A requested resume never silently turns
+  into a new session.
+- **Prompt on stdin.** `AdapterRunRequest.prompt` (with the orchestrator's injected context
+  already composed into it) is written to the child's stdin, never to argv, and
+  `--append-system-prompt` is deliberately unused: the context block is part of the task
+  text, which keeps the run reproducible from the prompt alone and avoids a second
+  injection channel.
+- **Resume by path.** With a bare id, pi resolves the session and asks an interactive
+  "fork this session into another project?" question when the session's project differs
+  from the process cwd; with stdin closed that question is never answered and **pi exits 0
+  having done nothing**. Passing the session file path skips resolution. A resume whose
+  recorded `cwd` differs from the requested `cwd` is refused before spawning, as a
+  classified `run/context-unavailable` failure with remediation, because pi cannot continue
+  it non-interactively.
+- **Events**: `run.started` → `session.bound` (from the stream's first header record) →
+  mapped events → exactly one `run.finished`. `--mode json` emits delta-only content, so
+  `message_update` maps to `message.delta`/`reasoning.delta`/`tool.started`, and
+  `tool_execution_start` is deduplicated by call id so one call yields one `tool.started`.
+  Records with no content, and records whose content repeats on a boundary the mapper
+  already uses, are deliberate no-ops; anything unrecognized becomes `unknown`, never a
+  silent drop.
+- **Idle** is `agent_settled`, not `agent_end` (a turn can retry after `agent_end`). The
+  managed process exit is the terminal boundary; if the stream ends without `agent_settled`,
+  the result carries a note saying the turn may not have finished.
+- **Exit classification.** Pi's JSON mode exits 0 even when the last assistant response
+  failed, so the terminal result also reads the stream's own `stopReason`/`errorMessage`. A
+  non-zero exit is classified from stderr (`session/not-found`, `auth/not-configured`,
+  `run/rate-limited`, else `run/agent-crashed`); a process that never reported an exit is
+  `run/start-failed`; a timeout is `run/timeout`; a cancellation is `run/cancelled`. An exit
+  with **no session header at all** is `run/context-unavailable`: that is the signature of
+  an unanswerable interactive question.
+- **Environment** (ADR-0014): `PI_CODING_AGENT_DIR` always, `PI_CODING_AGENT_SESSION_DIR`
+  whenever a session-directory override is in force, then `config.env`, then the request's
+  `env`. Provider credentials are **not** forwarded by default: with `envMode: 'minimal'`
+  they never reach the child, and with `'inherit-agent'`/`'inherit-all'` the runner's secret
+  filter drops them unless the adapter setting `inheritCredentialEnv` is enabled. That is
+  the explicit opt-in ADR-0014 requires; pi's own `auth.json` is the default path.
+- **Interactive launch**: `nativeLaunchCommand(id)` returns `pi [--session-dir <dir>]
+  [--session <id>]`, never `--resume` (it opens a picker). A launcher must export
+  `PI_CODING_AGENT_DIR` when a `homeDir` override is set, because argv cannot carry it.
+
+## Adapter settings
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `sessionDir` | `string` | unset | Session directory override, as pi's `--session-dir` defines it (the directory that directly holds session files). |
+| `inheritCredentialEnv` | `boolean` | `false` | Forward the host's provider credential variables (`PI_PROVIDER_ENV_VARS`) to a run, even though the child environment is derived. |
+
+## Extra beyond the SPI
+
+`capabilities().listModels` has no SPI method yet, so `PiAdapter.listModels(search?)` is
+exposed as an adapter-specific extra: it runs `pi --offline --list-models [search]` and
+parses the table into `{ provider, id, contextWindow, maxOutput, thinking, images }` rows.
+Rows are accepted only after pi's `provider  model  …` header, so the credential guidance pi
+prints when it has no usable provider is reported as a note instead of being parsed as
+models. `--offline` keeps the probe from refreshing catalogs or blocking on the network.

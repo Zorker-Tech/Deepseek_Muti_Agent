@@ -1,0 +1,44 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "jsx": "react-jsx",
+
+    "strict": true,
+    "noImplicitAny": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "types": ["node"],
+
+    "baseUrl": ".",
+    "paths": {
+      "@zorker/muti-agent-contracts": ["./packages/contracts/src/index.ts"],
+      "@zorker/muti-agent-contracts/*": ["./packages/contracts/src/*"],
+      "@zorker/muti-agent-core": ["./packages/core/src/index.ts"],
+      "@zorker/muti-agent-core/*": ["./packages/core/src/*"],
+      "@zorker/muti-agent-adapter-codex": ["./packages/adapter-codex/src/index.ts"],
+      "@zorker/muti-agent-adapter-grok": ["./packages/adapter-grok/src/index.ts"],
+      "@zorker/muti-agent-adapter-pi": ["./packages/adapter-pi/src/index.ts"],
+      "@zorker/muti-agent-control-plane": ["./packages/control-plane/src/index.ts"],
+      "@zorker/muti-agent-plugin": ["./packages/plugin/src/host/index.ts"]
+    }
+  }
+}

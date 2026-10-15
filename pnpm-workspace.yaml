@@ -1,0 +1,8 @@
+packages:
+  - packages/*
+
+# pnpm 10+ blocks dependencies shipping install scripts until they are explicitly
+# reviewed here (strictDepBuilds defaults to true: an unlisted script is a hard
+# install error). Only esbuild's native binary genuinely needs one.
+allowBuilds:
+  esbuild: true

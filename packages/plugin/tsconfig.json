@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "tsBuildInfoFile": "lib/tsconfig.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["src/**/*.test.ts"],
+  "references": [
+    { "path": "../contracts" },
+    { "path": "../core" },
+    { "path": "../adapter-codex" },
+    { "path": "../adapter-grok" },
+    { "path": "../adapter-pi" },
+    { "path": "../control-plane" }
+  ]
+}

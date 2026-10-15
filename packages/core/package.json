@@ -1,0 +1,21 @@
+{
+  "name": "@zorker/muti-agent-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MutiAgent domain core: adapter SPI and registry, managed process execution, session index, worktree isolation, orchestration and credential delegation.",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./src/*": "./src/*"
+  },
+  "files": ["lib"],
+  "dependencies": {
+    "@zorker/muti-agent-contracts": "workspace:*"
+  }
+}

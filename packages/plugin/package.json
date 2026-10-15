@@ -1,0 +1,53 @@
+{
+  "name": "@zorker/muti-agent-plugin",
+  "version": "0.1.0",
+  "description": "MutiAgent \u2014 one schema, one GUI and one orchestration runtime for Codex, Grok Build and Pi inside DeepSeek Harness.",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/host/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/host/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./mcp-stdio": "./lib/mcp-stdio.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "lib/mcp-stdio.js",
+    "lib/types/**/*.d.ts",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [],
+      "immediately": false
+    }
+  },
+  "dependencies": {
+    "@zorker/muti-agent-contracts": "workspace:*",
+    "@zorker/muti-agent-core": "workspace:*",
+    "@zorker/muti-agent-adapter-codex": "workspace:*",
+    "@zorker/muti-agent-adapter-grok": "workspace:*",
+    "@zorker/muti-agent-adapter-pi": "workspace:*",
+    "@zorker/muti-agent-control-plane": "workspace:*"
+  },
+  "icon": "./icon.svg"
+}

@@ -1,0 +1,10 @@
+{
+  "meta": {
+    "title": "MutiAgent",
+    "description": "One schema, one GUI and one orchestration runtime for Codex, Grok Build and Pi: per-agent session partitions, delegated runs in isolated git worktrees, a shared plan and todo board, and sign-in management for every agent."
+  },
+  "panel": {
+    "sessions": "Agents",
+    "mesh": "Mesh"
+  }
+}

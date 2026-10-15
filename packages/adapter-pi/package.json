@@ -1,0 +1,22 @@
+{
+  "name": "@zorker/muti-agent-adapter-pi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MutiAgent adapter for Pi: session store reading, headless JSON run driving, and read-only credential inspection.",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./src/*": "./src/*"
+  },
+  "files": ["lib"],
+  "dependencies": {
+    "@zorker/muti-agent-contracts": "workspace:*",
+    "@zorker/muti-agent-core": "workspace:*"
+  }
+}

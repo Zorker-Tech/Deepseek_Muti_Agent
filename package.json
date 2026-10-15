@@ -1,0 +1,32 @@
+{
+  "name": "@zorker/muti-agent-root",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MutiAgent \u2014 a multi-agent control plane for DeepSeek Harness: one schema, one GUI, one orchestration runtime across Codex, Grok Build and Pi.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "packageManager": "pnpm@11.28.5",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:host": "node scripts/build.mjs --face host",
+    "build:client": "node scripts/build.mjs --face client",
+    "typecheck": "tsc -b tsconfig.json",
+    "lint": "tsc -b tsconfig.json --pretty false",
+    "test": "node --test --experimental-strip-types \"tests/**/*.test.ts\"",
+    "test:unit": "node --test --experimental-strip-types \"packages/**/*.test.ts\"",
+    "test:fixtures": "node --test --experimental-strip-types \"tests/fixtures/**/*.test.ts\"",
+    "install:plugin": "node scripts/install-into-profile.mjs",
+    "clean": "node scripts/clean.mjs",
+    "verify:plugin": "node scripts/verify-plugin.mjs",
+    "verify": "node scripts/verify-plugin.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.2"
+  }
+}
