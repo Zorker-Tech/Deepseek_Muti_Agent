@@ -122,6 +122,115 @@ export const LAYOUT_CSS = `
   font-size: 11px;
 }
 
+/* The capabilities page: one section per category, each stating its own emptiness. */
+.ma-caps-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 20px;
+  overflow: auto;
+}
+
+.ma-caps-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ma-caps-title {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.ma-caps-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.ma-caps-picker select {
+  height: 28px;
+  padding: 0 6px;
+  border: 0.5px solid var(--dsw-alias-border-tertiary, var(--dsw-alias-border-secondary, transparent));
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+}
+
+.ma-caps-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ma-caps-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.ma-caps-count {
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
+  font-weight: 500;
+}
+
+.ma-caps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ma-caps-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--dsw-radius-xs);
+  font-size: 13px;
+}
+
+.ma-caps-row:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.ma-caps-name {
+  color: var(--dsw-alias-label-primary);
+}
+
+.ma-caps-tag {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: var(--dsw-radius-xs);
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+.ma-caps-desc {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ma-note--error {
+  color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-secondary));
+}
+
 .ma-run-status {
   display: inline-flex;
   flex-direction: column;

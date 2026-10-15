@@ -151,3 +151,21 @@ export function CloseGlyph(props: IconProps): React.ReactElement {
     </Glyph>
   )
 }
+
+/**
+ * The capabilities panel glyph: a layered stack, drawn with `currentColor` so the sidebar
+ * tints it like the harness's own rows.
+ *
+ * @returns The glyph element.
+ */
+export function CapabilitiesGlyph(): React.ReactElement {
+  return (
+    <svg viewBox="0 0 36 36" width="18" height="18" aria-hidden="true" focusable="false">
+      <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M9 13.5 18 8l9 5.5-9 5.5z" />
+        <path d="M9 18.5 18 24l9-5.5" />
+        <path d="M9 23.5 18 29l9-5.5" />
+      </g>
+    </svg>
+  )
+}

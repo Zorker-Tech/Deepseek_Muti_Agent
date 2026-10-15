@@ -19,16 +19,20 @@ import * as React from 'react'
 import { RpcClient, meshRevisionStore, subscribeMeshEvents } from './api.ts'
 import { installLocale, t, type LocaleServiceLike } from './locales.ts'
 import { installStyles } from './styles.ts'
-import { AgentsGlyph, MeshGlyph } from './icons.tsx'
+import { AgentsGlyph, CapabilitiesGlyph, MeshGlyph } from './icons.tsx'
 import { ToastStack } from './components/Toast.tsx'
 import { RENDER_CAP, SessionsView } from './views/SessionsView.tsx'
 import { MeshView } from './views/MeshView.tsx'
 import { AgentSelect } from './views/AgentSelect.tsx'
 import { SettingsSection } from './views/SettingsSection.tsx'
 import { CapabilitiesBody } from './views/CapabilitiesPanel.tsx'
+import { CapabilitiesPage } from './views/CapabilitiesPage.tsx'
 
 /** The sidebar row id and the matching `main` panel key of the sessions browser. */
-export /** The composer switcher's slot-entry id, kept apart from the two panel rows. */
+export /** The capabilities panel row and the page it addresses. */
+const CAPABILITIES_PANEL_ID = 'mutiagent-capabilities'
+
+/** The composer switcher's slot-entry id, kept apart from the two panel rows. */
 const COMPOSER_AGENT_ID = 'mutiagent-agent'
 
 const SESSIONS_PANEL_ID = 'mutiagent'
@@ -322,6 +326,30 @@ export function apply(ctx: ClientContext): SlotDisposer {
     // Toast stack: failure visibility that outlives whichever panel started the work.
     ctx.slots.inject('shell.overlay', () =>
       ctx.slots.register({ name: 'shell.overlay', id: TOASTS_ID }, ToastStack),
+    ),
+    // Capabilities: a panel row and a page, the same shape as the other two panels, because a
+    // right-sidebar tab *type* is not discoverable on its own — the sidebar renders tabs that
+    // are already open, so a type with no visible guide entry is invisible in practice.
+    ctx.slots.inject('sidebar.panellist', () =>
+      ctx.slots.register(
+        {
+          name: 'sidebar.panellist',
+          id: CAPABILITIES_PANEL_ID,
+          order: 32,
+          label: () => t('caps.panel'),
+        },
+        CapabilitiesGlyph,
+      ),
+    ),
+    ctx.slots.inject('main', () =>
+      ctx.slots.register(
+        {
+          name: 'main',
+          key: CAPABILITIES_PANEL_ID,
+          inject: () => ({ api }),
+        },
+        CapabilitiesPage,
+      ),
     ),
     // Capabilities: a tab type of our own in the right sidebar, whose body follows the
     // conversation's bound agent. Stage two — the body — lives under the definition's own id

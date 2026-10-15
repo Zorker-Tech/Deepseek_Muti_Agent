@@ -141,7 +141,7 @@ for (const key of EXPECTED_SLOTS) {
   check(registered.some(entry => entry.options?.name === key), `apply() registers into ${key}`)
 }
 const panelRows = registered.filter(entry => entry.options?.name === 'sidebar.panellist')
-check(panelRows.length === 2, 'two sidebar panel rows are contributed', panelRows.length)
+check(panelRows.length === 3, 'three sidebar panel rows are contributed', panelRows.length)
 const composerRows = registered.filter(entry => entry.options?.name === 'conversation.input.right')
 // One control only. The model selector in the composer stays the harness's own; this plugin
 // contributes an agent switcher and reads agent models as data, not as a second dropdown.
