@@ -20,6 +20,7 @@
 import type { AgentAuthState, AgentId, AuthOperationResult } from '@zorker/muti-agent-contracts'
 import type { AdapterContext, LoginParams } from '@zorker/muti-agent-core'
 import { isRecord, readNumber, readString, resolvePiStore } from './sessions.ts'
+import type { PiReadContext } from './sessions.ts'
 
 /**
  * Credential-shaped environment variables pi resolves a provider key from, as declared
@@ -119,7 +120,7 @@ interface CredentialObservation {
  * @returns Auth state with no secret material anywhere inside.
  */
 export async function readPiAuthStatus(
-  ctx: AdapterContext,
+  ctx: PiReadContext,
   agent: AgentId,
   options: { env?: NodeJS.ProcessEnv; now?: number } = {},
 ): Promise<AgentAuthState> {
@@ -229,7 +230,7 @@ export async function readPiAuthStatus(
  * @returns One entry per recognizable credential; empty when the file is absent or unreadable.
  */
 export async function readPiCredentials(
-  ctx: AdapterContext,
+  ctx: PiReadContext,
   credentialPath: string,
   now: number,
 ): Promise<readonly PiStoredCredential[]> {
@@ -289,7 +290,7 @@ export async function logoutPi(
 
 /** Classify every entry of an auth.json file. */
 async function observeCredentials(
-  ctx: AdapterContext,
+  ctx: PiReadContext,
   credentialPath: string,
   now: number,
 ): Promise<CredentialObservation> {

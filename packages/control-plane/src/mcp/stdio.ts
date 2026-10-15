@@ -87,6 +87,13 @@ export async function createStdioService(env: NodeJS.ProcessEnv = process.env): 
       ],
       failed: [],
     }),
+    // The standalone server registers no model routes: it has no harness LLM layer to
+    // register them into, and saying so is more useful than an empty list.
+    modelRoutes: () => [{
+      agentId: '*',
+      providers: [],
+      notes: ['the standalone MCP server has no harness LLM layer, so no model routes are registered'],
+    }],
     ...(process.argv[1] === undefined ? {} : { mcpEntry: process.argv[1] }),
   }
   registerOperations(catalog, context)

@@ -1,0 +1,19 @@
+{
+  "name": "@zorker/muti-agent-llm-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hand-rolled SSE framing, OpenAI-compatible chat-completions transport and the harness LLM seam in structural form, shared by MutiAgent's Pi and Grok Build harness adapters.",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./src/*": "./src/*"
+  },
+  "files": ["lib"],
+  "dependencies": {}
+}

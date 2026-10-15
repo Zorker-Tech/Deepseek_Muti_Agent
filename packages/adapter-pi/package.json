@@ -17,6 +17,7 @@
   "files": ["lib"],
   "dependencies": {
     "@zorker/muti-agent-contracts": "workspace:*",
-    "@zorker/muti-agent-core": "workspace:*"
+    "@zorker/muti-agent-core": "workspace:*",
+    "@zorker/muti-agent-llm-bridge": "workspace:*"
   }
 }

@@ -62,6 +62,13 @@ export interface DiagnosticsReport {
     transports: readonly { mode: string, mechanism: string, available: boolean }[]
   }[]
   warnings: readonly string[]
+  /** Per-agent model-route registration, so a missing provider is diagnosable. */
+  modelRoutes: readonly {
+    agentId: string
+    providers: readonly string[]
+    notes: readonly string[]
+    error?: string
+  }[]
 }
 
 /** Result of `mcp.config`. */
@@ -98,6 +105,19 @@ export interface RegistrationContext {
     /** Surfaces whose registration threw, with the reason. */
     failed: readonly { service: string, reason: string }[]
   }
+  /**
+   * What each agent's model-route registration did.
+   *
+   * Reported as data rather than a log line because it answers a user's question — "why is
+   * this agent's model missing from the selector?" — and a debug log is not an answer they
+   * can reach.
+   */
+  modelRoutes?: () => readonly {
+    agentId: string
+    providers: readonly string[]
+    notes: readonly string[]
+    error?: string
+  }[]
   /** Absolute path of the stdio MCP entry script, when the plugin knows it. */
   mcpEntry?: string
   /** Streamable HTTP endpoint, when the harness serves one. */
@@ -181,6 +201,7 @@ export function buildOperations(
           })),
         })),
         warnings,
+        modelRoutes: context.modelRoutes?.() ?? [],
       }
     },
   })

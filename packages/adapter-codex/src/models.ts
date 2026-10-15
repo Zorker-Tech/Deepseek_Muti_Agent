@@ -167,13 +167,36 @@ interface LayerFileRead {
   readonly table: TomlTable | undefined
 }
 
-/** A local model catalog file named by configuration, already projected. */
+/** One local model catalog file named by configuration, already projected. */
 interface CatalogJsonRead {
   /** The file as it is reported in `sources`. */
   readonly source: ModelSourceFile
   /** Models it declares. */
   readonly models: readonly AgentModel[]
 }
+
+/** One provider's credential shape, exactly as its `[model_providers.*]` entry declares it. */
+export interface CodexProviderAuthFacts {
+  /**
+   * The entry declares `requires_openai_auth`, so Codex authenticates it from its
+   * own credential store rather than from a variable.
+   */
+  readonly requiresOpenAiAuth: boolean
+  /** The entry carries `experimental_bearer_token`: a credential in configuration, whose value MutiAgent never reads. */
+  readonly literalBearerToken: boolean
+}
+
+/**
+ * One fact this read parses that {@link AgentModelCatalog} has no field for.
+ *
+ * The canonical catalog is deliberately narrower than Codex's configuration, so a
+ * consumer that needs a key the catalog has no home for receives it through
+ * {@link CodexModelCatalogRead.onFact} from the same pass over the same layers,
+ * rather than parsing the files a second time and risking a different answer.
+ */
+export type CodexConfigFact =
+  | ({ readonly kind: 'provider'; readonly providerId: string } & CodexProviderAuthFacts)
+  | { readonly kind: 'selection'; readonly reasoningEffort: string }
 
 /** Everything a catalog read needs. */
 export interface CodexModelCatalogRead {
@@ -190,6 +213,14 @@ export interface CodexModelCatalogRead {
    * `$PWD` a Codex invocation would use; defaults to the host process's own directory.
    */
   readonly projectDir?: string
+  /**
+   * Optional consumer of the facts this read parses but the canonical catalog has
+   * no field for. Supplying one changes nothing about the catalog or about which
+   * files are read: the facts come from this pass. The LLM route projection is the
+   * consumer that needs it — `requires_openai_auth` decides whether a Codex route's
+   * credential is the auth store, and `model_reasoning_effort` is the route default.
+   */
+  readonly onFact?: (fact: CodexConfigFact) => void
 }
 
 /**
@@ -312,7 +343,7 @@ export async function readCodexModelCatalog(read: CodexModelCatalogRead): Promis
     authStoreCredential ??= hasAuthStoreCredential(read)
     return authStoreCredential
   }
-  const providers = await projectProviders(providerLayers, env, notes, credentialPresent)
+  const providers = await projectProviders(providerLayers, env, notes, credentialPresent, read.onFact)
 
   const catalogJson = await readCatalogJson(read.files, layers, notes)
   if (catalogJson !== undefined) sources.push(catalogJson.source)
@@ -376,6 +407,8 @@ export async function readCodexModelCatalog(read: CodexModelCatalogRead): Promis
   const selectionKeys = UNPROJECTED_SELECTION_KEYS.filter(
     key => effectiveString(layers, key) !== undefined || effectiveNumber(layers, key) !== undefined,
   )
+  const reasoningEffort = effectiveString(layers, 'model_reasoning_effort')
+  if (reasoningEffort !== undefined) read.onFact?.({ kind: 'selection', reasoningEffort })
   if (selectionKeys.length > 0) {
     notes.push({
       field: '*',
@@ -523,6 +556,7 @@ function untrustedNote(dir: string, trust: string | undefined): string {
  * @param env - Environment inspected by variable name for each provider's `env_key`.
  * @param notes - Notes this projection appends to.
  * @param credentialPresent - Whether the Codex auth store holds a credential.
+ * @param onFact - Optional consumer of the auth facts this same pass reads.
  * @returns Configured providers first (sorted by id), then the built-in ids Codex ships.
  */
 async function projectProviders(
@@ -530,6 +564,7 @@ async function projectProviders(
   env: NodeJS.ProcessEnv,
   notes: ProjectionNote[],
   credentialPresent: () => Promise<boolean>,
+  onFact: ((fact: CodexConfigFact) => void) | undefined,
 ): Promise<readonly AgentProvider[]> {
   const configured = new Map<string, TomlTable>()
   for (const layer of layers) {
@@ -555,11 +590,19 @@ async function projectProviders(
         reason: `${id} is a reserved built-in provider id, and this Codex revision refuses a configuration that declares it (the Amazon Bedrock entries accept endpoint and credential overrides only)`,
       })
     }
-    providers.push(await projectProvider(id, table, env, notes, credentialPresent))
+    providers.push(await projectProvider(id, table, env, notes, credentialPresent, onFact))
   }
   for (const id of CODEX_BUILTIN_PROVIDER_IDS) {
     if (configured.has(id)) continue
-    providers.push(id === 'openai' ? { id, source: 'builtin', credentialPresent: await credentialPresent() } : { id, source: 'builtin' })
+    if (id !== 'openai') {
+      providers.push({ id, source: 'builtin' })
+      continue
+    }
+    // Codex's built-in OpenAI provider is `requires_openai_auth: true` with no
+    // `env_key` (`create_openai_provider` in model-provider-info), which is the
+    // fact a route projection needs to know where its credential comes from.
+    providers.push({ id, source: 'builtin', credentialPresent: await credentialPresent() })
+    onFact?.({ kind: 'provider', providerId: id, requiresOpenAiAuth: true, literalBearerToken: false })
   }
   return providers
 }
@@ -576,6 +619,7 @@ async function projectProviders(
  * @param env - Environment inspected by variable name.
  * @param notes - Notes this projection appends to.
  * @param credentialPresent - Whether the Codex auth store holds a credential.
+ * @param onFact - Optional consumer of the auth facts this projection read.
  * @returns The provider row.
  */
 async function projectProvider(
@@ -584,6 +628,7 @@ async function projectProvider(
   env: NodeJS.ProcessEnv,
   notes: ProjectionNote[],
   credentialPresent: () => Promise<boolean>,
+  onFact: ((fact: CodexConfigFact) => void) | undefined,
 ): Promise<AgentProvider> {
   const name = str(table, 'name')
   const baseUrl = str(table, 'base_url')
@@ -594,6 +639,8 @@ async function projectProvider(
   const literalToken = table['experimental_bearer_token'] !== undefined
   const opaqueAuth = OPAQUE_PROVIDER_AUTH_KEYS.filter(key => table[key] !== undefined)
   const unprojected = UNPROJECTED_PROVIDER_KEYS.filter(key => table[key] !== undefined)
+
+  onFact?.({ kind: 'provider', providerId: id, requiresOpenAiAuth, literalBearerToken: literalToken })
 
   if (catalogUrl !== undefined) {
     notes.push({

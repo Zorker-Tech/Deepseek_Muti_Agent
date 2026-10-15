@@ -57,6 +57,30 @@ const PROJECT_UNREAD_KEYS = ['models', 'model', 'model_providers', 'endpoints'] 
 /** `[models]` scalar pins that name a model for one purpose rather than the picker. */
 const SPECIAL_MODEL_PINS = ['web_search', 'session_summary', 'image_description', 'prompt_suggestion'] as const
 
+/**
+ * The model-relevant facts a harness LLM route needs beyond the canonical catalog: which
+ * model list the configuration actually declared, and which endpoint infers it.
+ *
+ * Produced by the same read that builds the catalog, so a route can never describe a model
+ * set or an endpoint the catalog does not.
+ */
+export interface GrokLlmFacts {
+  /**
+   * CLI chat proxy base URL in force: `[endpoints].cli_chat_proxy_base_url`,
+   * `$GROK_CLI_CHAT_PROXY_BASE_URL`, `[endpoints].xai_api_base_url`,
+   * `$GROK_XAI_API_BASE_URL`, else the production default.
+   */
+  chatProxyBaseUrl: string
+  /** Literal `[models].allowed_models` ids, in configured order. */
+  allowedModelIds: readonly string[]
+  /** `[models].allowed_models` entries that are picker globs rather than literal ids. */
+  allowedGlobs: readonly string[]
+  /** Effective default model id, after `GROK_DEFAULT_MODEL`. */
+  defaultModel?: string
+  /** Whether a custom models endpoint (`[endpoints].models_base_url`/`GROK_MODELS_BASE_URL`) is configured. */
+  customModelsEndpoint: boolean
+}
+
 /** Everything the catalog reader needs from its adapter. */
 export interface GrokModelReaderOptions {
   /** Read-only filesystem helpers; every read is bounded and tolerates a writer. */
@@ -69,6 +93,8 @@ export interface GrokModelReaderOptions {
   cwd: string
   /** Logger for diagnostics; never receives credential material. */
   log: Logger
+  /** Receives the LLM-relevant facts from this same read, when a caller needs them. */
+  collect?: (facts: GrokLlmFacts) => void
 }
 
 /** The `[model.<id>]` fields this catalog projects, already narrowed to their types. */
@@ -318,6 +344,16 @@ export async function readGrokModelCatalog(options: GrokModelReaderOptions): Pro
   if (!anyConfigured(merged)) {
     notes.push({ field: '*', reason: 'no readable [models] configuration was found; only grok built-in defaults apply' })
   }
+
+  options.collect?.({
+    chatProxyBaseUrl:
+      merged.cliChatProxyBaseUrl ?? nonBlank(hostEnv.GROK_CLI_CHAT_PROXY_BASE_URL)
+      ?? merged.xaiApiBaseUrl ?? nonBlank(hostEnv.GROK_XAI_API_BASE_URL) ?? GROK_DEFAULT_BASE_URL,
+    allowedModelIds: (merged.allowedModels ?? []).filter(entry => !isGlobPattern(entry)),
+    allowedGlobs: (merged.allowedModels ?? []).filter(entry => isGlobPattern(entry)),
+    ...(defaultModel === undefined ? {} : { defaultModel }),
+    customModelsEndpoint: merged.modelsBaseUrl !== undefined || nonBlank(hostEnv.GROK_MODELS_BASE_URL) !== undefined,
+  })
 
   return {
     agentId: AGENT_ID,

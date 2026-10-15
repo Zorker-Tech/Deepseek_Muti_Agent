@@ -930,3 +930,25 @@ function parseModelTable(text: string): {
   }
   return { models, skipped, firstLine, sawHeader }
 }
+
+/**
+ * The harness wiring surface: the routes Pi's own `models.json` declares, registered as
+ * harness LLM providers. Exported here so a host reaches them through the package it
+ * already depends on.
+ */
+export {
+  PI_LLM_SETTINGS_NS,
+  PI_ROUTE_PREFIX,
+  createPiLlmAdapter,
+  piRouteKey,
+  registerPiLlm,
+  resolvePiCredential,
+} from './llm.ts'
+export type {
+  PiLlmAdapterDeps,
+  PiLlmRegistration,
+  PiLlmRegistrationOptions,
+  PiLlmRoute,
+} from './llm.ts'
+export type { PiCatalogRead, PiDeclaredCredential, PiLlmDeclaration } from './models.ts'
+export type { PiReadContext } from './sessions.ts'

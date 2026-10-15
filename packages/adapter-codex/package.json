@@ -18,6 +18,7 @@
   "dependencies": {
     "@zorker/muti-agent-contracts": "workspace:*",
     "@zorker/muti-agent-core": "workspace:*",
+    "@zorker/muti-agent-llm-bridge": "workspace:*",
     "smol-toml": "^1.9.0"
   }
 }

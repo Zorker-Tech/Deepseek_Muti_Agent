@@ -28,6 +28,9 @@ import {
   registerOperations,
   type RegistrationContext,
 } from '@zorker/muti-agent-control-plane'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import type { LlmService } from '@zorker/muti-agent-llm-bridge'
 import { PLUGIN_VERSION } from '@zorker/muti-agent-contracts'
 import {
   createSurfaceState,
@@ -49,8 +52,18 @@ export const name = 'muti-agent'
 /** The validated settings schema, expressed as the harness's Standard-Schema contract. */
 export const Config = readPluginSettings.schema
 
+/** One agent's model-route registration outcome, kept for diagnostics. */
+interface ModelRouteOutcome {
+  agentId: string
+  providers: readonly string[]
+  notes: readonly string[]
+  error?: string
+}
+
 interface ActivationState {
   service: MutiAgentService | undefined
+  /** Filled when the LLM surface mounts, read by the diagnostics operation. */
+  modelRoutes: ModelRouteOutcome[]
   gateway: Gateway | undefined
   disposers: (() => void | Promise<void>)[]
   timers: NodeJS.Timeout[]
@@ -72,7 +85,14 @@ export async function apply(
   ctx: HarnessContext,
   rawConfig?: unknown,
 ): Promise<(() => Promise<void>) | undefined> {
-  const state: ActivationState = { service: undefined, gateway: undefined, disposers: [], timers: [], harness: undefined }
+  const state: ActivationState = {
+    service: undefined,
+    gateway: undefined,
+    disposers: [],
+    timers: [],
+    harness: undefined,
+    modelRoutes: [],
+  }
   ACTIVATIONS.set(ctx as object, state)
 
   const parsed = readPluginSettings.safeParse(rawConfig ?? {})
@@ -166,6 +186,7 @@ export async function apply(
     pluginVersion: PLUGIN_VERSION,
     // Read at call time, not captured here: registration is reactive, so the effective
     // surfaces change after activation.
+    modelRoutes: () => state.modelRoutes,
     surfaces: () => {
       const mounted = new Set(surfaces.mounted)
       const missing: { service: string, disables: string }[] = []
@@ -238,6 +259,21 @@ export async function apply(
       }, `muti-agent: route ${route.path}`))
     }
     ctx.logger?.debug?.('muti-agent: browser gateway registered')
+  })
+
+  // Surface D: the models the agents' own configuration files declare, registered into the
+  // harness's LLM layer so its model selector can offer and run them. This is what makes the
+  // sync real rather than cosmetic: a route is registered only together with a transport that
+  // knows how to speak to it (`llm-bridge` over `fetch`), so a listed model is one that
+  // answers. Reactive like the other surfaces, because `llm` is frequently registered after
+  // this plugin activates.
+  registerWhenAvailable(ctx, ['llm'], 'llm', surfaces, () => {
+    // Structural, like every other seam this plugin uses: the service is whatever the
+    // harness published under this name, and the bridge restates only the members a route
+    // registration touches (ADR-0006).
+    const llm = ctx.get('llm') as LlmService | undefined
+    if (llm === undefined) return
+    void registerAgentRoutes(ctx, state, llm, config)
   })
 
   // Background work: a warm session scan, then a sampler that keeps worktree progress
@@ -313,6 +349,91 @@ const SURFACE_DISABLES: readonly (readonly [string, string])[] = [
   ['connection', 'the browser gateway, so the GUI panels have no data source'],
   ['terminal', 'opening an agent\'s own interactive UI from the panel'],
 ]
+
+/**
+ * Register each agent's configured provider routes with the harness's LLM layer.
+ *
+ * Each adapter package owns the reading, the route naming and the transport choice, so this
+ * only supplies the agent directory and the environment. A failure to import or register one
+ * agent is logged and skipped: the other agents' models must still appear.
+ *
+ * @param ctx - The Cordis context.
+ * @param state - Activation state, so every disposer is released on unload.
+ * @param llm - The harness LLM service the routes are registered against.
+ * @param config - Resolved plugin settings, for per-agent home overrides.
+ */
+async function registerAgentRoutes(
+  ctx: HarnessContext,
+  state: ActivationState,
+  llm: LlmService,
+  config: MutiAgentPluginConfig,
+): Promise<void> {
+  const home = (agentId: string, envName: string, fallback: readonly string[]): string => {
+    const configured = config.agents[agentId]?.homeDir ?? ''
+    if (configured !== '') return configured
+    const fromEnv = process.env[envName]
+    if (fromEnv !== undefined && fromEnv !== '') return fromEnv
+    return join(homedir(), ...fallback)
+  }
+  const targets: readonly { agentId: string, register: () => Promise<{ dispose: () => void, providers: readonly string[], notes: readonly string[] }> }[] = [
+    {
+      agentId: 'pi',
+      register: async () => {
+        const module = await import('@zorker/muti-agent-adapter-pi')
+        return await module.registerPiLlm({ llm }, {
+          env: process.env,
+          agentDir: home('pi', 'PI_CODING_AGENT_DIR', ['.pi', 'agent']),
+        })
+      },
+    },
+    {
+      agentId: 'grok',
+      register: async () => {
+        const module = await import('@zorker/muti-agent-adapter-grok')
+        return await module.registerGrokLlm({ llm }, {
+          env: process.env,
+          homeDir: home('grok', 'GROK_HOME', ['.grok']),
+        })
+      },
+    },
+    {
+      agentId: 'codex',
+      register: async () => {
+        const module = await import('@zorker/muti-agent-adapter-codex')
+        return await module.registerCodexLlm({ llm }, {
+          env: process.env,
+          homeDir: home('codex', 'CODEX_HOME', ['.codex']),
+          cwd: process.cwd(),
+        })
+      },
+    },
+  ]
+
+  for (const target of targets) {
+    if (config.agents[target.agentId]?.enabled === false) continue
+    try {
+      const registration = await target.register()
+      state.disposers.push(registration.dispose)
+      state.modelRoutes.push({
+        agentId: target.agentId,
+        providers: registration.providers,
+        notes: registration.notes,
+      })
+      ctx.logger?.debug?.(
+        `muti-agent: ${target.agentId} registered ${String(registration.providers.length)} model route(s): ${registration.providers.join(', ') || 'none'}`,
+      )
+      for (const note of registration.notes) {
+        ctx.logger?.debug?.(`muti-agent: ${target.agentId} model route note: ${note}`)
+      }
+    } catch (cause) {
+      // A missing credential, an unreadable config or an absent package costs this agent's
+      // models and nothing else.
+      const reason = cause instanceof Error ? cause.message : String(cause)
+      state.modelRoutes.push({ agentId: target.agentId, providers: [], notes: [], error: reason })
+      ctx.logger?.warn?.(`muti-agent: ${target.agentId} model routes were not registered: ${reason}`)
+    }
+  }
+}
 
 /** The slash commands the plugin contributes. */
 function buildCommands(

@@ -11,6 +11,12 @@
  * managed process whose events are projected onto the canonical run union (ADR-0003,
  * ADR-0014). No consumer needs to know Codex's native shapes (ADR-0002).
  *
+ * `registerCodexLlm` is the second face: the same configuration, projected into
+ * `codex:<provider>` routes on the harness's `llm` service so Codex's own models are
+ * selectable and runnable through the harness, speaking the Responses wire Codex
+ * speaks. It is optional — a deployment without an `llm` service simply does not call
+ * it (ADR-0006).
+ *
  * @module @zorker/muti-agent-adapter-codex
  */
 
@@ -76,6 +82,35 @@ import {
   type CodexHome,
   type CodexTranscript,
 } from './sessions.ts'
+
+export {
+  CHATGPT_CODEX_BASE_URL,
+  CODEX_LLM_ROUTE_PREFIX,
+  CODEX_LLM_SETTINGS_NS,
+  CodexLlmAdapter,
+  OPENAI_API_BASE_URL,
+  codexLlmRoute,
+  createCodexLlmAdapter,
+  projectPlan,
+  readCodexLlmPlan,
+  registerCodexLlm,
+} from './llm.ts'
+export type {
+  CodexCredentialPlan,
+  CodexEndpoint,
+  CodexLlmAdapterDeps,
+  CodexLlmModel,
+  CodexLlmPlan,
+  CodexLlmPlanRead,
+  CodexLlmPlanResult,
+  CodexLlmPlanSource,
+  CodexLlmRegistration,
+  CodexLlmRegistrationOptions,
+  CodexLlmRoute,
+} from './llm.ts'
+export { readCodexBearer } from './llm-credentials.ts'
+export type { CodexBearer, CodexBearerKind, CodexBearerRead, CodexBearerSource } from './llm-credentials.ts'
+export type { CodexConfigFact, CodexProviderAuthFacts } from './models.ts'
 
 /** Canonical agent id. */
 export const CODEX_ID = 'codex'

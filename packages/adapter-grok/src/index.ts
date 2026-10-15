@@ -823,3 +823,24 @@ function errorOutput(outcome: { stderr: { head: string; tail: string; droppedByt
   const redacted = new Redactor().apply(text).trim()
   return redacted.length > ERROR_OUTPUT_CHARS ? redacted.slice(redacted.length - ERROR_OUTPUT_CHARS) : redacted
 }
+
+/**
+ * The harness wiring surface: grok's CLI chat proxy, registered as a harness LLM provider.
+ * Exported here so a host reaches it through the package it already depends on.
+ */
+export {
+  GROK_CLI_ROUTE,
+  GROK_LLM_CREDENTIAL_ENV_KEYS,
+  GROK_LLM_SETTINGS_NS,
+  GROK_ROUTE_PREFIX,
+  createGrokLlmAdapter,
+  readGrokBearer,
+  registerGrokLlm,
+} from './llm.ts'
+export type {
+  GrokLlmAdapterDeps,
+  GrokLlmRegistration,
+  GrokLlmRegistrationOptions,
+  GrokLlmRoute,
+} from './llm.ts'
+export type { GrokLlmFacts } from './models.ts'

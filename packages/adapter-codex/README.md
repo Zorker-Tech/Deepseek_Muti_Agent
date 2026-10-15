@@ -6,6 +6,11 @@ discovery and transcript reading from `$CODEX_HOME`, run dispatch through
 `codex exec --json`, native checklist extraction, the model and provider catalog read from
 Codex's own `config.toml`, and credential delegation to `codex login` / `codex logout`.
 
+Its second face is `registerCodexLlm`: the same configuration read again as **runnable
+harness model routes** (`codex:<provider-id>`), so Codex's own models can be selected and
+called from the harness's model selector. That face is optional — a deployment without an
+`llm` service simply does not call it.
+
 Nothing here writes to a foreign store (ADR-0012). Rollouts, the title index, `auth.json`
 and `config.toml` are opened read-only through `FileProbe`; the only mutations this adapter
 can cause are the ones Codex performs for itself when the CLI is asked to log in or out
@@ -423,6 +428,137 @@ Every one of these is attached to the object it affects as a `ProjectionNote`, c
 59. Duplicate ids collapse into one row: the configured default keeps its `isDefault` and
     gains only what it lacked from a catalog file.
 
+## Harness LLM routes (`registerCodexLlm`)
+
+`registerCodexLlm(ctx, options)` turns the configuration this adapter already reads into
+routes the **harness itself** can select and call, instead of only describing them to the
+MutiAgent GUI. One read — the same `readCodexModelCatalog` `listModels()` uses, with a fact
+sink for the two provider keys the canonical catalog has no field for — feeds both
+registrations:
+
+- `ctx.llm.registerAdapter(routes, adapter)` registers one adapter for every route below;
+- `ctx.llm.registerConfigurableProviders(entries)` declares the same routes so the harness
+  lists them (live or dormant) beside its own providers.
+
+The returned object carries `providers` (the route keys), `notes` (every refusal, every
+catalog gap, every route that cannot authenticate right now) and a `dispose()` that releases
+both registrations. The response body is translated by `src/llm-responses.ts`; the SSE
+framing, in-band error classification and attribution headers are the shared
+`@zorker/muti-agent-llm-bridge` ones, the same code the Pi and Grok Build routes use.
+
+| Concern | This adapter |
+|---|---|
+| Route key | `codex:<providerId>` — e.g. `codex:corp-gateway`, `codex:openai` |
+| Why the prefix | a `[model_providers.*]` id may be `openai`, `deepseek`, … — names the harness ships; `codex:` keeps a user declaration from colliding with a shipped route, and makes the origin visible in the selector |
+| Selector grouping | one provider per route, displayed as `Codex · <name>` (`Codex · OpenAI` for the built-in endpoint) |
+| Routes registered | every `[model_providers.<id>]` entry that names a `base_url`, plus the built-in `openai` endpoint when the configuration names a model for it and the auth store holds a credential |
+| Models offered | exactly the ids the configuration names (default `model`, `review_model`, `model_catalog_json`), with `display_name`, `contextWindow` and reasoning levels where the same read knows them |
+| Endpoint | `<base_url>/responses`; the built-in route uses Codex's own default for the credential kind: `https://chatgpt.com/backend-api/codex` (ChatGPT) or `https://api.openai.com/v1` (API key) |
+| Credential | the entry's `env_key` from the environment, resolved per request; a `requires_openai_auth` entry and the built-in route read `<home>/auth.json` per request, so a `codex login` reaches the next call without a restart |
+| Request | `POST <base>/responses`, `store: false`, `stream: true`, `tool_choice: "auto"`, `parallel_tool_calls: true`, `prompt_cache_key` = the harness session id |
+| Response | `block-start`/deltas/`block-end` per block, `usage` before exactly one `finish`; tool calls are assembled from `response.function_call_arguments.delta` |
+| Settings namespace | `muti-agent` unless the host passes its own plugin entry id |
+
+A route is registered even when its credential does not resolve right now: its identity is
+the user's own declaration, the credential is resolved afresh on every request and on every
+model listing, and the harness's configurable-provider directory is the surface built to
+carry the reason. What such a route does *not* do is offer models — a selector must never
+present something that cannot run. The built-in `openai` route is the reverse case: it is
+this adapter's own route rather than a declaration, so it is registered only when the auth
+store holds a credential, and skipped with a note when it does not.
+
+### What the model selector shows
+
+`listModels('codex:<id>')` returns the configuration's own ids for that route, in
+configuration order, each with `inputModalities: ['text']`. `resolveModel` reports the
+context window and reasoning levels the configuration knows (a `model_context_window`, a
+`model_catalog_json` entry's `context_window` / `supported_reasoning_levels`), plus
+`model_reasoning_effort` as the model's default effort when that level is one the model
+declares. An id the configuration never mentions is still described and still dispatched:
+the Codex backend, not this file, decides which ids exist.
+
+Where a model's provider is not named per model, it is the configuration's `model_provider`,
+and with none configured it is the built-in OpenAI provider — the way Codex routes them. A
+model whose provider has no runnable route (a built-in `ollama`/`lmstudio`/Bedrock entry,
+or a `[model_providers.*]` entry without a `base_url`) contributes a note rather than a
+silent disappearance.
+
+### The Responses wire this speaks
+
+Request shape and event handling were verified against the Codex revision in the checkout
+under test — `codex-rs/codex-api/src/sse/responses.rs` (the event decoder:
+`response.created`, `response.output_item.added`/`done`, `response.output_text.delta`,
+`response.reasoning_summary_text.delta` / `response.reasoning_text.delta`,
+`response.completed` / `response.incomplete` / `response.failed`, the in-band `error`
+event), `codex-rs/codex-api/src/common.rs` (`ResponsesApiRequest`),
+`codex-rs/core/src/client.rs` (`build_responses_request`),
+`codex-rs/core/src/context/base_instructions.rs`,
+`codex-rs/tools/src/responses_api.rs` (the function-tool declaration), and
+`codex-rs/protocol/src/models.rs` (`ResponseItem`, `ContentItem`).
+
+Three deliberate divergences:
+
+- Codex ignores `response.function_call_arguments.delta` and reads a call's arguments from
+  the finished item. This adapter consumes both, so the harness can show a call while it is
+  still being written; the finished item's arguments are appended only if they extend what
+  streamed, so the assembled block can never contradict the deltas a consumer already saw.
+- Codex fails a stream whose final record never terminated. The shared framing discards the
+  half-written record too, but reports the truncation, and this module turns it into a
+  `STREAM_CLOSED` failure naming it.
+- Codex sends `reasoning.summary` and its own service tier; this adapter sends `reasoning`
+  only when an effort is selected, and never sends a service tier or any other
+  Codex-specific request field.
+
+### Deliberately not supported, and why
+
+- **Codex's other built-in providers** (`ollama`, `lmstudio`, the Bedrock entries). This
+  adapter registers what the configuration names; those endpoints live in Codex's code, not
+  in `config.toml`, and inventing a base URL for them would be this plugin guessing.
+- **A `[model_providers.*]` entry without a `base_url`.** There is no endpoint to post to,
+  so the route is not registered and the note names the missing key.
+- **`experimental_bearer_token`.** A credential written into configuration is never read,
+  not even to test it; the route is registered with a note telling the user to move it to
+  `env_key`, and a request through it fails with `MISSING_CREDENTIAL`.
+- **Image input.** Every route declares `inputModalities: ['text']`, so the harness projects
+  images to placeholder text before dispatch. The wire accepts images; this adapter has no
+  attachment access through the seam it speaks.
+- **Reasoning content on the request side.** A reasoning block is never sent back, because
+  the Responses wire accepts a reasoning item only together with the encrypted form the
+  provider returned, and this adapter emits no `replayState` to carry it. A replayed turn
+  re-sends the visible text and its tool calls.
+- **Stop sequences.** The Responses request vocabulary has no `stop` field, so a request
+  that names one is refused with `UNSUPPORTED_OPTION` instead of silently generating past
+  the requested halt.
+- **`deferLoading` tool declarations.** The harness hint is not translated: the route
+  declares no `toolUpdate` mode, so every request declares the complete tool list, which is
+  exactly what an ignored defer request produces.
+- **Codex's `stream_idle_timeout_ms`, `request_max_retries` and `stream_max_retries`.** The
+  shared transport enforces no idle bound; a stalled provider is bounded by the caller's
+  `AbortSignal` and by the harness's own retry policy, which classifies a transport failure
+  as retryable.
+- **HTTP redirects.** The request is sent with `redirect: 'error'`: a credential may not be
+  carried to a host the configuration never named.
+- **`wire_api` values other than `responses`.** This revision of Codex accepts only
+  `"responses"` and refuses anything else at load time; `models.ts` already declares such a
+  value in a note.
+
+### Verifying it
+
+```sh
+node --test packages/adapter-codex/tests/stub-provider.test.ts
+node --test packages/adapter-codex/tests/registration.test.ts
+```
+
+Both bundle `src/llm.ts` with esbuild (the tool `scripts/build.mjs` uses, because by-name
+workspace imports resolve to built `lib/` directories, not source). The first drives a
+loopback stub endpoint that speaks the Responses stream — text deltas, a function call split
+across three events, a usage-bearing `response.completed` — and asserts the exact
+`StreamChunk` sequence, the request body, and the failure codes for a truncated stream, an
+in-band failure and an unsupported option. The second mounts the harness's real `LlmRuntime`
+on a bare `Context`, registers through it, and asserts the provider directory, the model
+listing, exact-model resolution, a prepared call's materialized reasoning default, the
+streamed chunk sequence, and that `dispose()` empties both registries.
+
 ## Adapter settings
 
 Read from `AdapterRuntimeConfig.settings`; an unset entry is ignored and a present but
@@ -447,12 +583,28 @@ const adapter = createCodexAdapter(ctx) // ctx: AdapterContext from @zorker/muti
 registry.add(adapter)
 ```
 
+Registering the Codex models as harness routes, in a composition that mounts an `llm`
+service:
+
+```ts
+import { registerCodexLlm } from '@zorker/muti-agent-adapter-codex'
+
+const registration = await registerCodexLlm(
+  { llm: ctx.llm },
+  { homeDir: ctx.config.homeDir, env: process.env, cwd: process.cwd() },
+)
+// registration.providers, registration.notes, registration.dispose()
+```
+
 ## Layout
 
 | File | Contents |
 |---|---|
-| `src/index.ts` | `CODEX_ID`, `CodexAdapter`, `createCodexAdapter`, run dispatch and settings |
+| `src/index.ts` | `CODEX_ID`, `CodexAdapter`, `createCodexAdapter`, run dispatch and settings; the `registerCodexLlm` surface re-exported |
 | `src/sessions.ts` | Rollout discovery, head parsing, title index, transcript projection, native task extraction |
 | `src/events.ts` | `codex exec --json` line → `AgentRunEvent` mapping, outcome classification, the run event queue |
 | `src/auth.ts` | `auth.json` classification and `codex login` / `codex logout` delegation |
 | `src/models.ts` | `config.toml` layer discovery, TOML parsing (`smol-toml`), and the model/provider catalog projection |
+| `src/llm.ts` | `codex:<id>` routes: configuration → plan, the adapter, and both harness registrations |
+| `src/llm-responses.ts` | The Responses request body and the event-stream translator onto `StreamChunk` |
+| `src/llm-credentials.ts` | Read-only `auth.json` bearer resolution for `requires_openai_auth` routes |

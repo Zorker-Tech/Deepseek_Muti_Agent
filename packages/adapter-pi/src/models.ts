@@ -38,9 +38,9 @@ import type {
   ModelSourceFile,
   ProjectionNote,
 } from '@zorker/muti-agent-contracts'
-import type { AdapterContext } from '@zorker/muti-agent-core'
 import { readPiCredentials, type PiStoredCredential } from './auth.ts'
 import { isRecord, readArray, readBoolean, readNumber, readRecord, readString, resolvePiStore } from './sessions.ts'
+import type { PiReadContext } from './sessions.ts'
 
 /** Pi thinking levels, in Pi's own `getSupportedThinkingLevels` order. */
 const PI_THINKING_LEVELS: readonly string[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
@@ -135,6 +135,54 @@ export interface PiModelCatalogOptions {
   now?: number
 }
 
+
+/**
+ * How Pi resolves one provider's declared `apiKey` (`resolve-config-value.ts`).
+ *
+ * The value itself is carried only for a literal, because only that form can be sent
+ * without running the user's command or interpolating the environment first.
+ */
+export type PiDeclaredCredential =
+  /** `!command`: Pi runs a shell command. Refused by the LLM route rather than executed. */
+  | { kind: 'command' }
+  /** No reference: the value itself. */
+  | { kind: 'literal'; value: string }
+  /** `$NAME`/`${NAME}` references, or the variable Pi's own discovery reads for this provider. */
+  | { kind: 'env'; names: readonly string[] }
+  /** Nothing declared and no ambient variable Pi is known to read. */
+  | { kind: 'none' }
+
+/**
+ * One `models.json` provider declaration, projected for the harness LLM bridge.
+ *
+ * This is the same parse the catalog is built from, projected differently: a route needs
+ * the endpoint, the declared headers and the credential shape, which the canonical
+ * `AgentProvider` deliberately does not carry (ADR-0002 keeps that schema provider-neutral).
+ */
+export interface PiLlmDeclaration {
+  /** Provider id, verbatim. */
+  providerId: string
+  /** `api`, verbatim; absent when the entry declares none. */
+  api?: string
+  /** `baseUrl`, verbatim. */
+  baseUrl?: string
+  /** Provider-declared request headers. May carry a credential-shaped value; never logged. */
+  headers?: Readonly<Record<string, string>>
+  credential: PiDeclaredCredential
+  /** Model ids this provider's own `models` array declares. */
+  modelIds: readonly string[]
+  /** Declared models whose own entry overrides `api` or `baseUrl`, which a route cannot honour. */
+  transportOverrides: readonly string[]
+}
+
+/** One read of Pi's configuration: the canonical catalog, and the LLM routes it declares. */
+export interface PiCatalogRead {
+  /** What the catalog SPI consumes. */
+  catalog: AgentModelCatalog
+  /** One entry per `models.json` provider, in file order. */
+  declarations: readonly PiLlmDeclaration[]
+}
+
 /** One JSON file read as an object, with the reason when it yielded none. */
 interface JsonRead {
   /** Whether the file exists. */
@@ -208,16 +256,37 @@ interface CatalogDraft {
  * absent file, a missing agent directory or a malformed `models.json`: each degrades into a
  * `sources` entry and a {@link ProjectionNote}.
  *
- * @param ctx - Adapter context (configuration and read-only file helpers).
+ * @param ctx - Ambient services (logger, runtime config, read-only file helpers).
  * @param agent - This adapter's canonical agent id.
  * @param options - Environment, project directory and observation time; injected for testability.
  * @returns The catalog of what Pi's own configuration declares on this machine.
  */
 export async function readPiModelCatalog(
-  ctx: AdapterContext,
+  ctx: PiReadContext,
   agent: AgentId,
   options: PiModelCatalogOptions = {},
 ): Promise<AgentModelCatalog> {
+  return (await readPiModelCatalogWithRoutes(ctx, agent, options)).catalog
+}
+
+/**
+ * Read Pi's configuration once, as both the canonical catalog and the provider declarations
+ * an LLM route needs.
+ *
+ * One parse feeds both projections, so a route can never describe an endpoint or a model
+ * set that the catalog does not: the same `models.json` text decides what this machine can
+ * run and what the harness may select.
+ *
+ * @param ctx - Ambient services (logger, runtime config, read-only file helpers).
+ * @param agent - This adapter's canonical agent id.
+ * @param options - Environment, project directory and observation time; injected for testability.
+ * @returns The catalog plus one declaration per `models.json` provider.
+ */
+export async function readPiModelCatalogWithRoutes(
+  ctx: PiReadContext,
+  agent: AgentId,
+  options: PiModelCatalogOptions = {},
+): Promise<PiCatalogRead> {
   const env = options.env ?? process.env
   const now = options.now ?? Date.now()
   const cwd = ctx.files.resolvePath(options.cwd ?? process.cwd())
@@ -228,6 +297,7 @@ export async function readPiModelCatalog(
     sources: [],
     notes: [PI_BUILTIN_CATALOG_NOTE],
   }
+  let declarations: readonly PiLlmDeclaration[] = []
 
   const modelsPath = `${layout.agentDir}/models.json`
   const trustPath = `${layout.agentDir}/trust.json`
@@ -239,8 +309,9 @@ export async function readPiModelCatalog(
 
   const modelsFile = await readJsonObject(ctx, modelsPath)
   draft.sources.push(sourceOf(modelsPath, modelsFile))
-  if (modelsFile.value !== undefined) projectModelsJson(draft, modelsFile.value, env, credentials)
-  else if (modelsFile.error !== undefined) {
+  if (modelsFile.value !== undefined) {
+    declarations = projectModelsJson(draft, modelsFile.value, env, credentials)
+  } else if (modelsFile.error !== undefined) {
     draft.notes.push({
       field: 'providers',
       reason: `${modelsPath} ${modelsFile.error}, so no configured providers or models were read from it`,
@@ -286,13 +357,16 @@ export async function readPiModelCatalog(
   declareSettingsLosses(draft, settings)
 
   return {
-    agentId: agent,
-    ...(settings.defaultModel === undefined ? {} : { defaultModel: settings.defaultModel }),
-    providers: draft.providers,
-    models: draft.models,
-    sources: draft.sources,
-    notes: draft.notes,
-    observedAt: new Date(now).toISOString(),
+    catalog: {
+      agentId: agent,
+      ...(settings.defaultModel === undefined ? {} : { defaultModel: settings.defaultModel }),
+      providers: draft.providers,
+      models: draft.models,
+      sources: draft.sources,
+      notes: draft.notes,
+      observedAt: new Date(now).toISOString(),
+    },
+    declarations,
   }
 }
 
@@ -302,11 +376,11 @@ const EMPTY_SETTINGS: PiSettingsValues = { modelThinkingLevels: false, thinkingB
 /**
  * Read one JSON file as an object, tolerating absence and corruption.
  *
- * @param ctx - Adapter context.
+ * @param ctx - Ambient services (read-only file helpers).
  * @param path - Absolute path.
  * @returns Presence, the object when there is one, and why there is not.
  */
-async function readJsonObject(ctx: AdapterContext, path: string): Promise<JsonRead> {
+async function readJsonObject(ctx: PiReadContext, path: string): Promise<JsonRead> {
   const parsed = await ctx.files.readJson<unknown>(path)
   if (!parsed.ok) {
     return parsed.missing
@@ -374,7 +448,7 @@ function projectModelsSourceOf(path: string, read: JsonRead): ModelSourceFile {
  * @param path - Absolute settings path.
  * @returns The read result and the projected values.
  */
-async function readSettings(ctx: AdapterContext, path: string): Promise<{ read: JsonRead; values: PiSettingsValues }> {
+async function readSettings(ctx: PiReadContext, path: string): Promise<{ read: JsonRead; values: PiSettingsValues }> {
   const read = await readJsonObject(ctx, path)
   return { read, values: read.value === undefined ? EMPTY_SETTINGS : projectSettingsValues(read.value) }
 }
@@ -473,13 +547,14 @@ function projectTrustFor(trustFile: JsonRead, cwd: string, agentSettings: PiSett
  * @param config - The decoded `models.json` object.
  * @param env - Environment credential references are resolved against.
  * @param credentials - Credential facts observed from `auth.json`.
+ * @returns One LLM route declaration per provider entry, in file order.
  */
 function projectModelsJson(
   draft: CatalogDraft,
   config: Record<string, unknown>,
   env: NodeJS.ProcessEnv,
   credentials: CredentialFacts,
-): void {
+): readonly PiLlmDeclaration[] {
   if (readRecord(config, 'modelOverrides') !== undefined) {
     draft.notes.push({
       field: 'models',
@@ -494,11 +569,12 @@ function projectModelsJson(
       field: 'providers',
       reason: 'models.json declares no `providers` object, which Pi rejects as an invalid models.json',
     })
-    return
+    return []
   }
 
   const unprojected = { provider: new Set<string>(), model: new Set<string>() }
   const overrideProviders = new Set<string>()
+  const declarations: PiLlmDeclaration[] = []
   let malformedProviders = 0
   let malformedModels = 0
   let overrideOnly = 0
@@ -540,6 +616,7 @@ function projectModelsJson(
 
     const overrides = readRecord(rawProvider, 'modelOverrides') ?? {}
     const declaredHere = new Set<string>()
+    const transportOverrides: string[] = []
     for (const definition of readArray(rawProvider, 'models') ?? []) {
       if (!isRecord(definition)) {
         malformedModels += 1
@@ -557,6 +634,12 @@ function projectModelsJson(
       if (patch !== undefined) collectPresent(patch, UNPROJECTED_MODEL_KEYS, unprojected.model)
       draft.models.push(projectModel(modelId, providerId, definition, patch, 'config'))
       declaredHere.add(modelId)
+      // A per-model `api` or `baseUrl` sends that model somewhere this route cannot
+      // follow, so it is refused rather than requested over the provider's endpoint.
+      if (configuredText(readString(definition, 'api')) !== undefined
+        || configuredText(readString(definition, 'baseUrl')) !== undefined) {
+        transportOverrides.push(modelId)
+      }
     }
     for (const [modelId, rawOverride] of Object.entries(overrides)) {
       if (declaredHere.has(modelId)) continue
@@ -569,6 +652,16 @@ function projectModelsJson(
       overrideOnly += 1
       overrideProviders.add(providerId)
     }
+
+    declarations.push({
+      providerId,
+      ...(wireApi === undefined ? {} : { api: wireApi }),
+      ...(baseUrl === undefined ? {} : { baseUrl }),
+      ...headersOf(rawProvider),
+      credential: declaredCredentialShape(providerId, configuredText(readString(rawProvider, 'apiKey'))),
+      modelIds: [...declaredHere],
+      transportOverrides,
+    })
   }
 
   if (malformedProviders > 0) {
@@ -611,6 +704,63 @@ function projectModelsJson(
       reason: `model keys with no canonical field are configured and not carried: ${[...unprojected.model].sort().join(', ')}`,
     })
   }
+  return declarations
+}
+
+/**
+ * The headers a provider entry declares, as string entries.
+ *
+ * A declared value may be a credential in itself (a gateway's own key header), so it is
+ * carried to the request and never logged or reported.
+ *
+ * @param rawProvider - The provider entry.
+ * @returns The headers, or nothing when the entry declares none.
+ */
+function headersOf(rawProvider: Record<string, unknown>): Pick<PiLlmDeclaration, 'headers'> {
+  const raw = readRecord(rawProvider, 'headers')
+  if (raw === undefined) return {}
+  const headers: Record<string, string> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === 'string') headers[key] = value
+  }
+  return Object.keys(headers).length === 0 ? {} : { headers }
+}
+
+/**
+ * Classify one provider's `apiKey` for the LLM route.
+ *
+ * A provider that declares none still gets the ambient variable Pi's own discovery reads
+ * for well-known ids, so a route authenticates the same way Pi would; everything else is
+ * declared as nothing rather than guessed at.
+ *
+ * @param providerId - Provider id, verbatim.
+ * @param apiKey - The declared `apiKey`, when there is one.
+ * @returns The shape, with the value present only for a literal.
+ */
+function declaredCredentialShape(providerId: string, apiKey: string | undefined): PiDeclaredCredential {
+  if (apiKey === undefined) {
+    const ambient = PI_PROVIDER_ENV_BY_ID[providerId]?.[0]
+    return ambient === undefined ? { kind: 'none' } : { kind: 'env', names: [ambient] }
+  }
+  const shape = classifyConfigValue(apiKey)
+  switch (shape.kind) {
+    case 'command':
+      return { kind: 'command' }
+    case 'literal':
+      return { kind: 'literal', value: unescapeConfigValue(apiKey) }
+    case 'env':
+      return { kind: 'env', names: shape.names }
+  }
+}
+
+/**
+ * Undo the literal escapes Pi's config-value resolver honours in a value with no reference.
+ *
+ * @param value - The configured value.
+ * @returns The value with `$$` and `$!` resolved to their literal characters.
+ */
+function unescapeConfigValue(value: string): string {
+  return value.replace(/\$\$/g, '$').replace(/\$!/g, '!')
 }
 
 /**

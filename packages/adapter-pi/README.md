@@ -199,6 +199,83 @@ Every declared loss, gathered:
   `providerId` from `defaultProvider`, `isDefault` while no `enabledModels` scope excludes it),
   with a note: it is normally a built-in model, and only the id is known here.
 
+## Harness LLM routes (`registerPiLlm`)
+
+`registerPiLlm(ctx, options)` makes the providers `models.json` declares selectable **and
+runnable** from the harness's own model selector, instead of only describing them to the
+MutiAgent GUI. It reads the configuration once, through the same
+`readPiModelCatalogWithRoutes` call this adapter's `listModels()` uses, and then:
+
+- `ctx.llm.registerAdapter(routes, adapter)` registers one adapter for the routes below;
+- `ctx.llm.registerConfigurableProviders(entries)` declares the same routes so the harness
+  lists them (live or dormant) beside its own providers.
+
+The returned `dispose()` releases both; `providers` lists the registered route keys, and
+`notes` carries every refusal and every catalog gap as a string.
+
+| Concern | This adapter |
+|---|---|
+| Route key | `pi:<providerId>` — e.g. `pi:local-qwen`, `pi:bifrost` |
+| Why the prefix | a `models.json` entry may be named after a provider the harness ships; `pi:` keeps it from shadowing that route |
+| Selector grouping | one provider per `models.json` entry, displayed as `Pi · <providerId>` |
+| Models offered | the provider's `models` entries as the catalog projects them (id, `name`, `contextWindow`, `reasoningEfforts`), after `settings.enabledModels` scoping |
+| Directory entry | `declared: true`, `settingsPath: []`, `defaultBaseURL` = `baseUrl` + `/chat/completions` |
+| Credential | `$NAME`/`${NAME}` resolved from the environment per request, a literal sent as it stands; never logged, reported or persisted |
+| Request | `POST <baseUrl>/chat/completions`, `stream: true`, `stream_options.include_usage` |
+| Settings namespace | `muti-agent` unless the host passes its own plugin entry id |
+
+`settingsPath` is empty because the profile is Pi's own `models.json` entry, not a section of
+harness settings: the route is a read of that file, and the harness settings UI is not where
+it is edited.
+
+### Deliberately not supported, and why
+
+- **Any `api` other than `openai-completions`.** A provider whose `api` is absent, or names
+  another protocol, is *not registered*: this adapter cannot speak it, and declaring the
+  route anyway would put a model in the selector that fails on use. The note names the value
+  it refused.
+- **A `!command` `apiKey`.** Running the user's command as part of a model call needs a
+  decision of its own (what runs, under which environment, what its output means), so the
+  route is refused with a note rather than executed.
+- **A per-model `api` or `baseUrl`.** Pi lets a model entry override the provider's endpoint
+  or protocol; a route with one fixed endpoint cannot follow that, so those models are not
+  offered and the note names them.
+- **Model-level `headers`.** Only a provider entry's `headers` are sent; a per-model override
+  is not carried, so a provider that authenticates one model differently is not supported.
+- **Credentials that exist only in `auth.json`.** `authStatus()` reports them, but a route
+  authenticates from the declared `apiKey` (or the ambient variable Pi resolves for a
+  well-known provider id) only. A provider with neither declaration nor ambient variable sends
+  no `Authorization` header, which is what a self-hosted endpoint usually wants.
+- **Image input.** Every route reports `inputModalities: ['text']`, so the harness projects
+  images to text for it; the bridge refuses an image block outright if one still arrives.
+- **Reasoning dialects beyond `reasoning_effort`.** A model's `thinkingLevelMap` decides which
+  levels are *offered* (its `xhigh`/`max` rules; `off` is never offered, because it means "send
+  nothing"), but the offered level's own name is sent as OpenAI's `reasoning_effort` string. A
+  provider that wants another spelling or another field (a `chat_template_kwargs` object, an
+  Anthropic thinking budget) is not reproduced — declare no `thinkingLevelMap` for such a model.
+- **`tool_choice`.** The harness request carries no such field, so the provider's own default
+  applies. Tool declarations are sent complete on every request: this route declares no
+  `toolUpdate` mode, so the harness strips `deferLoading` and the developer messages itself.
+
+### Variables read (names only)
+
+| Variable | Read for |
+|---|---|
+| `PI_CODING_AGENT_DIR` | the agent directory, when `options.agentDir` is not passed |
+| the single variable a provider's `apiKey` references | that request's `Authorization` header |
+| the ambient variable Pi resolves for a well-known provider id (the map in `models.ts`) | the same, for a provider that declares no `apiKey` |
+
+### Verifying it
+
+```sh
+node --test packages/adapter-pi/tests/registration.test.ts
+```
+
+The test bundles `src/llm.ts` with esbuild (the same tool `scripts/build.mjs` uses, because
+by-name workspace imports resolve to each package's built `lib/`), points a stub endpoint at
+it, and asserts the registered routes, the directory entries, the refusal notes, the model
+listing and the exact `StreamChunk` sequence one request produces.
+
 ## Why five things are absent
 
 - **Todos (none).** Pi has no todo tool: its built-in tools are `read`, `bash`,

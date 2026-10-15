@@ -282,6 +282,75 @@ and credential-store values are never retained.
   sampling defaults, `query_params`, `env_http_headers`, `notice`, `description` — are
   not projected.
 
+## Harness LLM route (`registerGrokLlm`)
+
+`registerGrokLlm(ctx, options)` registers grok's CLI chat proxy as a harness LLM route, so a
+model the endpoint serves can be selected and run from the harness's own selector. It reads
+grok's configuration once (through `readGrokModelCatalog`, the same read `listModels()` uses)
+and then:
+
+- `ctx.llm.registerAdapter([GROK_CLI_ROUTE], adapter)` registers the adapter;
+- `ctx.llm.registerConfigurableProviders([entry])` declares the route to the harness.
+
+The returned `dispose()` releases both; `providers` and `notes` report what happened.
+
+| Concern | This adapter |
+|---|---|
+| Route key | `grok:cli-chat-proxy` (the `grok:` prefix keeps it from shadowing a shipped provider) |
+| Selector grouping | one provider, displayed as `Grok Build` |
+| Endpoint | `https://cli-chat-proxy.grok.com/v1` + `/chat/completions`, overridable by `[endpoints].cli_chat_proxy_base_url`, `$GROK_CLI_CHAT_PROXY_BASE_URL`, `[endpoints].xai_api_base_url`, `$GROK_XAI_API_BASE_URL` |
+| Models offered | the literal `[models].allowed_models` ids when the configuration declares them; else the `[models].default` / `$GROK_DEFAULT_MODEL` id; else **none** |
+| Directory entry | `declared: true`, `settingsPath: []`, `defaultBaseURL`, `baseURLEnv`, `nativeAuth: { env: ['XAI_API_KEY', 'GROK_CODE_XAI_API_KEY'], oauth: true }` |
+| Credential | `XAI_API_KEY` (grok's own documented precedence), else `GROK_CODE_XAI_API_KEY`, else the key a `grok login` wrote to `auth.json`; read per request, never logged, reported or persisted |
+| Request | `POST <endpoint>/chat/completions`, `Authorization: Bearer …`, `X-XAI-Token-Auth: xai-grok-cli`, `x-grok-model-override: <model>` |
+| Settings namespace | `muti-agent` unless the host passes its own plugin entry id |
+
+### The empty model list is the honest answer
+
+Grok keeps no model table on disk: `grok models` prints what the endpoint offers, and the
+configuration only narrows or extends that list. So when the configuration names no model,
+the route registers **no** models and says so — the endpoint is authoritative and this plugin
+makes no discovery request. Offering a guessed list would show a user models nobody declared
+and nobody can correct; a note points at `[models] default`/`allowed_models` instead.
+
+A request naming an id the configuration does not mention is still dispatched: the proxy
+decides what exists, and `resolveModel` describes any id with whatever the configuration knows
+about it (a `[model.<id>]` table's `context_window` and `reasoning_efforts`, otherwise
+nothing). Refusing one would be this plugin inventing a rule the file never stated.
+
+### Deliberately not supported, and why
+
+- **Picker globs in `allowed_models`.** A pattern like `grok-4*` names no model id, so no
+  model row is derived from it; the note names the patterns. Declare literal ids to offer them
+  here.
+- **`[model.<id>]` BYOK tables as selectable models.** Such a table may set its own
+  `base_url`/`env_key`/`auth_provider`; one proxy route cannot follow a per-model endpoint, so
+  these tables only contribute metadata (context window, reasoning efforts) to ids the rules
+  above already chose.
+- **A custom models endpoint.** When `[endpoints].models_base_url` or `$GROK_MODELS_BASE_URL`
+  is set, grok sends inference there; this route still targets the CLI chat proxy, because that
+  is the endpoint this adapter speaks. The note says so — use a Pi route (or another provider
+  entry) for an OpenAI-compatible endpoint of your own.
+- **Token refresh.** A stored `grok login` token expires after 7 days and this adapter does not
+  refresh it; an expired token is reported in the notes, and the provider answers 401, which
+  the route classifies as an auth failure. Run `grok login` to renew it.
+- **`GROK_AUTH` and `GROK_DEPLOYMENT_KEY`.** Those address grok's management API, not this
+  proxy, so they are not read.
+- **Image input, `tool_choice`, and non-`reasoning_effort` thinking dialects.** The same limits
+  the Pi route documents: this transport sends text, complete tool declarations, and OpenAI's
+  `reasoning_effort` field only.
+
+### Verifying it
+
+```sh
+node --test packages/adapter-grok/tests/registration.test.ts
+```
+
+The test bundles `src/llm.ts` with esbuild (by-name workspace imports resolve to each
+package's built `lib/`, which is not source), points the route at a stub endpoint through
+`GROK_CLI_CHAT_PROXY_BASE_URL`, and asserts the model-list rules, the credential sources, the
+proxy headers and the exact `StreamChunk` sequence.
+
 ## Adapter settings
 
 | Key | Meaning |
@@ -318,3 +387,4 @@ Set for children: `GROK_HOME` (resolved), `GROK_AUTH_PATH` (only when it is an o
 | `src/events.ts` | streaming-json line → `AgentRunEvent`, plus exit classification |
 | `src/auth.ts` | credential status and login/logout delegation |
 | `src/models.ts` | model/provider catalog: config precedence, TOML/JSON overlay parsing, projection |
+| `src/llm.ts` | the CLI chat proxy as a harness LLM route: config read, model-list rules, credential resolution, registration |

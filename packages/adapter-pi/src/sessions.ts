@@ -109,6 +109,15 @@ export function parsePiSettings(settings: Readonly<Record<string, unknown>>): Pi
   }
 }
 
+/**
+ * The ambient services the store resolver and the catalog reader actually use.
+ *
+ * Narrower than `AdapterContext` on purpose: a host that only reads Pi's configuration —
+ * the harness LLM registration — supplies a file probe, a logger and a runtime config, and
+ * must not have to fake a process runner it never calls.
+ */
+export type PiReadContext = Pick<AdapterContext, 'log' | 'config' | 'files'>
+
 /** Where a machine keeps Pi's configuration and sessions. */
 export interface PiStoreLayout {
   /** Resolved agent config directory (`$PI_CODING_AGENT_DIR` or `~/.pi/agent`). */
@@ -131,12 +140,12 @@ export interface PiStoreLayout {
  * Resolve the store layout from the adapter settings, the host environment and pi's
  * own settings file, in that precedence order.
  *
- * @param ctx - Adapter context (configuration and read-only file helpers).
+ * @param ctx - Ambient services (configuration and read-only file helpers).
  * @param env - Host environment; injected for testability.
  * @returns The resolved layout.
  */
 export async function resolvePiStore(
-  ctx: AdapterContext,
+  ctx: PiReadContext,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<PiStoreLayout> {
   const settings = parsePiSettings(ctx.config.settings)
@@ -165,7 +174,7 @@ export async function resolvePiStore(
 }
 
 /** Read `sessionDir` from pi's own settings.json, tolerating every failure. */
-async function readSettingsSessionDir(ctx: AdapterContext, settingsPath: string): Promise<string | undefined> {
+async function readSettingsSessionDir(ctx: PiReadContext, settingsPath: string): Promise<string | undefined> {
   const parsed = await ctx.files.readJson<unknown>(settingsPath)
   if (!parsed.ok || !isRecord(parsed.value)) return undefined
   return readString(parsed.value, 'sessionDir')

@@ -34,6 +34,8 @@
       "@zorker/muti-agent-contracts/*": ["./packages/contracts/src/*"],
       "@zorker/muti-agent-core": ["./packages/core/src/index.ts"],
       "@zorker/muti-agent-core/*": ["./packages/core/src/*"],
+      "@zorker/muti-agent-llm-bridge": ["./packages/llm-bridge/src/index.ts"],
+      "@zorker/muti-agent-llm-bridge/*": ["./packages/llm-bridge/src/*"],
       "@zorker/muti-agent-adapter-codex": ["./packages/adapter-codex/src/index.ts"],
       "@zorker/muti-agent-adapter-grok": ["./packages/adapter-grok/src/index.ts"],
       "@zorker/muti-agent-adapter-pi": ["./packages/adapter-pi/src/index.ts"],
