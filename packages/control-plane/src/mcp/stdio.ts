@@ -89,6 +89,7 @@ export async function createStdioService(env: NodeJS.ProcessEnv = process.env): 
     }),
     // The standalone server registers no model routes: it has no harness LLM layer to
     // register them into, and saying so is more useful than an empty list.
+    presets: () => [],
     modelRoutes: () => [{
       agentId: '*',
       providers: [],

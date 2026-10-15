@@ -28,6 +28,7 @@ import {
   registerOperations,
   type RegistrationContext,
 } from '@zorker/muti-agent-control-plane'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { LlmService } from '@zorker/muti-agent-llm-bridge'
@@ -52,6 +53,14 @@ export const name = 'muti-agent'
 /** The validated settings schema, expressed as the harness's Standard-Schema contract. */
 export const Config = readPluginSettings.schema
 
+/** One agent-preset registration outcome, kept for diagnostics. */
+interface PresetOutcome {
+  agentId: string
+  presetId: string
+  registered: boolean
+  note?: string
+}
+
 /** One agent's model-route registration outcome, kept for diagnostics. */
 interface ModelRouteOutcome {
   agentId: string
@@ -66,6 +75,8 @@ interface ActivationState {
   modelRoutes: ModelRouteOutcome[]
   /** Adapters this build carries that did not register, with the reason. */
   skippedAdapters: { agentId: string, reason: string }[]
+  /** Agent presets registered for the external agents, read by the diagnostics operation. */
+  presets: PresetOutcome[]
   gateway: Gateway | undefined
   disposers: (() => void | Promise<void>)[]
   timers: NodeJS.Timeout[]
@@ -95,6 +106,7 @@ export async function apply(
     harness: undefined,
     modelRoutes: [],
     skippedAdapters: [],
+    presets: [],
   }
   ACTIVATIONS.set(ctx as object, state)
 
@@ -192,6 +204,7 @@ export async function apply(
     // surfaces change after activation.
     modelRoutes: () => state.modelRoutes,
     skippedAdapters: () => state.skippedAdapters,
+    presets: () => state.presets,
     surfaces: () => {
       const mounted = new Set(surfaces.mounted)
       const missing: { service: string, disables: string }[] = []
@@ -264,6 +277,16 @@ export async function apply(
       }, `muti-agent: route ${route.path}`))
     }
     ctx.logger?.debug?.('muti-agent: browser gateway registered')
+  })
+
+  // Surface E: one agent preset per external agent, whose composition carries that agent's
+  // tools. This is the only route that makes the harness's *own* capability surfaces follow:
+  // they derive from the session's composition, so a session that runs under one of these
+  // presets logs that agent's tool catalog honestly and every derived panel shows it. It costs
+  // the conversation the harness agent's normal toolset (the preset's composition replaces it),
+  // which is why it is opt-in per conversation rather than the default.
+  registerWhenAvailable(ctx, ['agentPresets'], 'agentPresets', surfaces, () => {
+    void registerAgentPresets(ctx, state, config)
   })
 
   // Surface D: the models the agents' own configuration files declare, registered into the
@@ -446,6 +469,112 @@ async function registerAgentRoutes(
       const reason = cause instanceof Error ? cause.message : String(cause)
       state.modelRoutes.push({ agentId: target.agentId, providers: [], notes: [], error: reason })
       ctx.logger?.warn?.(`muti-agent: ${target.agentId} model routes were not registered: ${reason}`)
+    }
+  }
+}
+
+/**
+ * Register one agent preset per external agent.
+ *
+ * The composition is derived from the harness's own `standard` preset rather than written out
+ * here: a preset *replaces* the agent plane, so a hand-written minimal one would leave the
+ * conversation without a system prompt or filesystem tools, and a copied one would drift as
+ * upstream changes. Deriving it means the preset is the standard agent plus this agent's tools.
+ *
+ * Nothing is registered when that derivation fails, because a preset we could not derive would
+ * give the user a broken agent. The outcome is reported through `agents.diagnostics` so the
+ * absence is diagnosable rather than mysterious.
+ *
+ * @param ctx - The Cordis context.
+ * @param state - Activation state, for disposers and the diagnostic record.
+ * @param config - Resolved plugin settings.
+ */
+async function registerAgentPresets(
+  ctx: HarnessContext,
+  state: ActivationState,
+  config: MutiAgentPluginConfig,
+): Promise<void> {
+  const presets = ctx.get('agentPresets') as
+    | {
+        readDocument?(agentPreset: string): Promise<{ content?: string }>
+        register(definition: {
+          id: string
+          name?: string
+          description?: string
+          order?: number
+          plugins: readonly unknown[]
+        }): Promise<() => Promise<void>>
+      }
+    | undefined
+  if (presets === undefined) return
+
+  // The base composition is taken from the harness's own `standard` preset, which the registry
+  // exposes as dumped YAML — and the round-trip is *checked*, not assumed. That preset carries
+  // `!!js` conditions (its bash/pwsh rows disable themselves per platform); if a parse-and-redump
+  // turned an expression into a plain string, a truthy string would silently disable those rows
+  // for everyone, giving the user a subtly broken agent rather than a visible failure. So the
+  // composition is used only when it survives a lossless round-trip, and otherwise refused with
+  // the reason recorded in diagnostics.
+  let base: readonly unknown[] | undefined
+  let refusal: string | undefined
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      const document = await presets.readDocument?.('standard')
+      if (document?.content !== undefined && document.content.trim() !== '') {
+        const rows = (parseYaml(document.content) as unknown)
+        if (!Array.isArray(rows)) {
+          refusal = 'the standard preset composition did not parse as a list of rows'
+        } else if (stringifyYaml(rows).trim() !== document.content.trim()) {
+          refusal = 're-serializing the standard preset composition did not reproduce it byte for byte, so registering a derived preset could silently change a row (an `!!js` condition would become a truthy string)'
+        } else {
+          base = rows
+          refusal = undefined
+        }
+        break
+      }
+    } catch (cause) {
+      refusal = `the standard preset composition could not be read: ${cause instanceof Error ? cause.message : String(cause)}`
+    }
+    await new Promise<void>(resolve => { setTimeout(resolve, 500).unref?.() })
+  }
+  if (base === undefined && refusal === undefined) {
+    refusal = 'the harness standard preset was not present, so the composition could not be derived'
+  }
+
+  for (const agentId of Object.keys(config.agents)) {
+    if (config.agents[agentId]?.enabled === false) continue
+    const presetId = `mutiagent-${agentId}`
+    if (base === undefined) {
+      state.presets.push({
+        agentId,
+        presetId,
+        registered: false,
+        note: `${refusal ?? 'the composition could not be derived'}; nothing was registered rather than registering a preset without a system prompt or filesystem tools`,
+      })
+      continue
+    }
+    try {
+      const dispose = await presets.register({
+        id: presetId,
+        name: `MutiAgent · ${agentId}`,
+        description: `Runs the harness agent with ${agentId}'s own tools exposed as delegated calls, so this conversation's tool catalog is ${agentId}'s.`,
+        order: 50,
+        plugins: [
+          ...base,
+          { id: `mutiagent-proxy-${agentId}`, name: '@zorker/muti-agent-plugin/agent-proxy', config: { agentId } },
+        ],
+      })
+      state.disposers.push(() => { void dispose() })
+      state.presets.push({ agentId, presetId, registered: true })
+      ctx.logger?.debug?.(`muti-agent: preset ${presetId} registered over ${String(base.length)} derived rows`)
+    } catch (cause) {
+      state.presets.push({
+        agentId,
+        presetId,
+        registered: false,
+        note: cause instanceof Error ? cause.message : String(cause),
+      })
+      ctx.logger?.warn?.(`muti-agent: preset ${presetId} was not registered: ${cause instanceof Error ? cause.message : String(cause)}`)
     }
   }
 }

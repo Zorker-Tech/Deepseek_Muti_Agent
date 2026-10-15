@@ -73,7 +73,7 @@ function parseArgs(argv) {
     if (arg === '--all') continue
     throw new Error(`unknown build argument ${JSON.stringify(arg)}`)
   }
-  if (options.faces.length === 0) options.faces = ['host', 'client', 'mcp']
+  if (options.faces.length === 0) options.faces = ['host', 'client', 'mcp', 'proxy']
   return options
 }
 
@@ -90,6 +90,29 @@ async function buildHost(minify) {
     sourcemap: true,
     // Node builtins stay external; every workspace package is bundled, so the
     // installed artifact has no dependency of ours to resolve at runtime.
+    external: ['node:*'],
+    legalComments: 'none',
+    logLevel: 'warning',
+    banner: { js: CJS_REQUIRE_BANNER },
+  })
+}
+
+/**
+ * Build the preset-mounted proxy plugin.
+ *
+ * A separate entry because a preset row names a package specifier, so the proxy must be its
+ * own module: `${PACKAGE_NAME}/agent-proxy`.
+ */
+async function buildAgentProxy(minify) {
+  await build({
+    entryPoints: [join(pluginDir, 'src', 'host', 'agent-proxy.ts')],
+    outfile: join(pluginDir, 'lib', 'agent-proxy.js'),
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    target: 'node22',
+    minify,
+    sourcemap: true,
     external: ['node:*'],
     legalComments: 'none',
     logLevel: 'warning',
@@ -183,6 +206,7 @@ for (const face of options.faces) {
   if (face === 'host') await buildHost(options.minify)
   else if (face === 'client') await buildClient(options.minify)
   else if (face === 'mcp') await buildMcp(options.minify)
+  else if (face === 'proxy') await buildAgentProxy(options.minify)
   else if (face === 'types') await buildTypes()
   else throw new Error(`unknown build face ${JSON.stringify(face)}`)
 }

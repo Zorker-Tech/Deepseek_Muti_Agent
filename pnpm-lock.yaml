@@ -132,6 +132,9 @@ importers:
       '@zorker/muti-agent-llm-bridge':
         specifier: workspace:*
         version: link:../llm-bridge
+      yaml:
+        specifier: ^2.6.0
+        version: 2.9.1
 
 packages:
 

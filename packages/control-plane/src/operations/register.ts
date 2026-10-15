@@ -72,6 +72,13 @@ export interface DiagnosticsReport {
    * that is not installed — and the two need different fixes.
    */
   skippedAdapters: readonly { agentId: string, reason: string }[]
+  /**
+   * Agent presets registered for the external agents.
+   *
+   * Reported because a preset that failed to register is invisible in the roster, and the user
+   * would have no way to tell "this agent offers no preset" from "the derivation failed".
+   */
+  presets: readonly { agentId: string, presetId: string, registered: boolean, note?: string }[]
   /** Per-agent model-route registration, so a missing provider is diagnosable. */
   modelRoutes: readonly {
     agentId: string
@@ -157,6 +164,8 @@ export interface RegistrationContext {
   }[]
   /** Adapters that failed to register, with the reason. */
   skippedAdapters?: () => readonly { agentId: string, reason: string }[]
+  /** Agent presets registered for the external agents. */
+  presets?: () => readonly { agentId: string, presetId: string, registered: boolean, note?: string }[]
   /** Absolute path of the stdio MCP entry script, when the plugin knows it. */
   mcpEntry?: string
   /** Streamable HTTP endpoint, when the harness serves one. */
@@ -242,6 +251,7 @@ export function buildOperations(
         warnings,
         modelRoutes: context.modelRoutes?.() ?? [],
         skippedAdapters: context.skippedAdapters?.() ?? [],
+        presets: context.presets?.() ?? [],
       }
     },
   })
