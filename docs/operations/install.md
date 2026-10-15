@@ -159,3 +159,4 @@ with `git worktree remove`.
 | Credentials show `unknown` with source `keyring` | The credential lives in the OS keyring, which MutiAgent does not read. Enable `credentials.probeCli` and open the agent once. |
 | A run fails with `worktree/not-a-repository` | Isolation was requested for a directory that is not inside a git work tree. Dispatch with `isolation: 'shared-cwd'` or initialize a repository. |
 | Sessions list is empty | Press **Refresh**; the warm scan runs once at activation and on demand. A partition note says whether the agent is unscanned, uninstalled, or genuinely empty. |
+| Panels render but every method answers `not found` | Two harnesses were booted against the same profile. The launcher rewrites the profile's `cordis.yml` on every boot, so concurrent boots interleave and can compose a tree without the bundle layer. Boot one profile at a time. |
