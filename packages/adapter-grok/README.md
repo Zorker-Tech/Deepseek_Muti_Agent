@@ -17,6 +17,7 @@ private formats.
 | Transcript | `<session>/updates.jsonl` (ACP stream, authoritative) or `<session>/chat_history.jsonl` (derived cache) | `session/storage/mod.rs` |
 | Todos / plan | `<session>/plan.json`, `<session>/plan_mode.json` | `session/storage/mod.rs`, `tools/.../todo/mod.rs`, `session/plan_mode.rs` |
 | Credentials | `$GROK_AUTH_PATH` or `$GROK_HOME/auth.json`, a scope-keyed map | `xai-grok-login/src/storage.rs`, `src/model.rs` |
+| Model catalog | `listModels()` reads `[models]`, `[model.<id>]`, `[model_providers.<id>]` and `[endpoints]` from the managed/config/requirements tiers, reports the project tier without merging it, and reads the `GROK_CONFIG`/`GROK_CONFIG_PATH` overlays | `xai-grok-config/src/config_layers.rs`, `env_overlay.rs`, `config_override.rs`, `xai-grok-permission-rules/src/project_config.rs` |
 
 Not used on purpose:
 
@@ -200,6 +201,87 @@ it, then classified:
 - Declared loss: a `deployment-key` credential and an environment-supplied key are not
   manageable from MutiAgent, so `logout` cannot revoke them; the state says so.
 
+## Model catalog (`listModels`)
+
+`listModels()` projects grok's **configured** models and endpoints onto
+`AgentModelCatalog`. Grok keeps no model table on disk — `grok models` prints what the
+endpoint offers — so the catalog is deliberately the configured subset, never a network
+answer. Nothing is written; a missing or malformed file is a declared gap, and the call
+never throws.
+
+### Files read, lowest precedence first
+
+| # | Source | Model-relevant keys |
+|---|---|---|
+| 1 | `/etc/grok/managed_config.toml` | `[models]`, `[model.<id>]`, `[model_providers.<id>]`, `[endpoints]` |
+| 2 | `$GROK_HOME/managed_config.toml` | same |
+| 3 | `$GROK_HOME/config.toml` | same |
+| — | project `.grok/config.toml`, repo root → cwd | **read but never merged**: grok takes only `[mcp_servers]`, `[plugins]`, `[permission]` and `[mcp] max_output_bytes` from a project file, so a model key there is reported and ignored |
+| 4 | `GROK_CONFIG_PATH` file, then `GROK_CONFIG` inline JSON | `[models]` only — grok's overlay allowlist keeps `models`, `features`, a narrowed `toolset` and the `shell_environment_policy` filter fields, and an inline value that parses wins over the path |
+| 5 | `$GROK_HOME/requirements.toml` | same keys as 1–3 (an admin pin wins over everything below it) |
+| 6 | `/etc/grok/requirements.toml` | same keys |
+| 7 | macOS MDM `ai.x.grok` | not read: device-management preferences, not a file |
+
+`$GROK_HOME` is `$GROK_HOME` verbatim when non-empty, else `~/.grok`. The merge order is
+`xai-grok-config/src/config_layers.rs`; the project tier is
+`xai-grok-permission-rules/src/project_config.rs`; the overlay allowlist is
+`config_override.rs` (`OVERLAY_ALLOW_PATHS`). `$GROK_AUTH_PATH` (`$GROK_HOME/auth.json`)
+is read through the same helper as `authStatus()`, and only to decide whether a provider
+has a credential.
+
+### Projection
+
+| Canonical field | Native source |
+|---|---|
+| `defaultModel` | `[models].default` from the merged layers; environment `GROK_DEFAULT_MODEL` overrides every file, the order grok resolves (`CLI > env > config`) |
+| `models[].id` | `[model.<id>]` section key (what `-m` accepts), or an `allowed_models` entry |
+| `models[].displayName` | `[model.<id>].name` |
+| `models[].providerId` | `[model.<id>].model_provider` |
+| `models[].contextWindow` | `[model.<id>].context_window` |
+| `models[].reasoningEfforts` | `[model.<id>].reasoning_efforts` (bare strings or `{value = "…"}` tables); the deprecated `reasoning_effort` when the list is absent |
+| `models[].isDefault` | the id equal to `defaultModel` |
+| `providers[]` | the built-in `grok` provider, plus one per `[model_providers.<id>]` |
+| `providers[].baseUrl` | `[endpoints].models_base_url` ?? `$GROK_MODELS_BASE_URL`, else `[endpoints].cli_chat_proxy_base_url` ?? `$GROK_CLI_CHAT_PROXY_BASE_URL`, else `[endpoints].xai_api_base_url` ?? `$GROK_XAI_API_BASE_URL`, else `https://cli-chat-proxy.grok.com/v1` |
+| `providers[].apiKeyEnv` | `XAI_API_KEY` for the built-in provider, else the first `[model_providers.<id>].env_key` name |
+| `providers[].credentialPresent` | that variable is present, or an inline `api_key` is set (presence only), or the credential store has an entry with key material |
+| `providers[].wireApi` | `[model_providers.<id>].api_backend` verbatim (`chat_completions`, `responses`, `messages`) |
+
+`source` is `builtin` for the built-in endpoint and `config` for everything a file
+declared. A config value wins over a same-named endpoint environment variable, because
+grok merges the `[endpoints]` table over its env-derived defaults
+(`xai-grok-config/src/endpoints.rs`). No secret is read: `env_key` contributes variable
+*names*, `api_key` contributes only the fact that it is set, and `extra_headers`, `env`
+and credential-store values are never retained.
+
+### Declared losses
+
+- **The endpoint is authoritative.** `grok models` and `/v1/models` are never queried,
+  so a model the endpoint offers but no configuration file mentions is absent here —
+  deliberately, because a catalog read makes no network call (ADR-0012).
+- macOS MDM `ai.x.grok` requirements are not read (declared on darwin).
+- An absent file contributes nothing and says nothing, which is its expected state; a
+  file the bounded read truncated, or that failed to parse, carries its reason on the
+  `sources` entry and a `sources` note. An empty file is grok's "unset".
+- Project-tier `[models]`, `[model.*]`, `[model_providers.*]` and `[endpoints]` are
+  reported on the source entry and in a note, and never merged — grok ignores them too.
+- An overlay's `$VAR` references are kept verbatim (grok expands them), and an overlay's
+  `version_overrides` and campaign patches are not applied.
+- `[models].disabled_models` removes those ids from `models[]` and names them in a note;
+  `hidden_models` and `[model.<id>].hidden` only hide from the picker, so the row stays,
+  with a note, because `-m` still selects it.
+- An `allowed_models` glob (`*`, `?`, `[...]`) is a picker pattern, not a model id: no
+  row is derived from it and a note names the globs. A declared `[model.<id>]` outside a
+  non-empty allowlist stays in the catalog with a note — the list restricts selection,
+  not the catalog.
+- `[model.<id>].model` different from the section key: `id` is the section key, and the
+  mismatch is named in a note, because the wire model id has no canonical field.
+- `[models]` pins (`web_search`, `session_summary`, `image_description`,
+  `prompt_suggestion`) name models the canonical catalog has no slot for and are named
+  in a note; `[subagents.models]` is not read at all.
+- Per-model fields with no canonical slot — `base_url`, a model-level `api_backend`,
+  sampling defaults, `query_params`, `env_http_headers`, `notice`, `description` — are
+  not projected.
+
 ## Adapter settings
 
 | Key | Meaning |
@@ -217,7 +299,11 @@ Standard adapter config still applies: `binaryPath`, `homeDir`, `env`, `envMode`
 ## Environment
 
 Read: `GROK_HOME` (verbatim, no XDG fallback), `GROK_AUTH_PATH`, `XAI_API_KEY`,
-`GROK_CODE_XAI_API_KEY`, `GROK_AUTH`, `GROK_DEPLOYMENT_KEY`, `GROK_SANDBOX`.
+`GROK_CODE_XAI_API_KEY`, `GROK_AUTH`, `GROK_DEPLOYMENT_KEY`, `GROK_SANDBOX`, and for the
+model catalog `GROK_CONFIG`, `GROK_CONFIG_PATH`, `GROK_DEFAULT_MODEL`,
+`GROK_MODELS_BASE_URL`, `GROK_MODELS_LIST_URL`, `GROK_CLI_CHAT_PROXY_BASE_URL` and
+`GROK_XAI_API_BASE_URL` (endpoint variables contribute a URL only; credential variables
+contribute only presence).
 
 Set for children: `GROK_HOME` (resolved), `GROK_AUTH_PATH` (only when it is an override),
 `GROK_SANDBOX` (when a sandbox is configured), plus the credential variables the
@@ -231,3 +317,4 @@ Set for children: `GROK_HOME` (resolved), `GROK_AUTH_PATH` (only when it is an o
 | `src/sessions.ts` | session discovery, cwd-dir decode, transcript reader, native task reader |
 | `src/events.ts` | streaming-json line → `AgentRunEvent`, plus exit classification |
 | `src/auth.ts` | credential status and login/logout delegation |
+| `src/models.ts` | model/provider catalog: config precedence, TOML/JSON overlay parsing, projection |

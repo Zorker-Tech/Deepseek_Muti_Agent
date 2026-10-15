@@ -4,7 +4,9 @@
  * One implementation of the {@link AgentAdapter} SPI for Codex: `describe()` detects
  * the binary and `$CODEX_HOME` once and caches the descriptor; `listSessions`,
  * `readTranscript` and `readNativeTasks` read Codex's own rollout store in place
- * (ADR-0012); `authStatus`/`login`/`logout` inspect `auth.json` read-only and delegate
+ * (ADR-0012); `listModels` reads the model and provider catalog out of `config.toml` and
+ * the project layers, without a network call and without reading a secret;
+ * `authStatus`/`login`/`logout` inspect `auth.json` read-only and delegate
  * every mutation to the CLI (ADR-0010); and `run` drives `codex exec --json` as a
  * managed process whose events are projected onto the canonical run union (ADR-0003,
  * ADR-0014). No consumer needs to know Codex's native shapes (ADR-0002).
@@ -24,6 +26,7 @@ import {
   type AgentAuthState,
   type AgentCapabilities,
   type AgentDescriptor,
+  type AgentModelCatalog,
   type AgentSession,
   type AuthOperationResult,
   type NativeSessionId,
@@ -62,6 +65,7 @@ import {
   readCodexAuthState,
 } from './auth.ts'
 import { CodexExecEventMapper, RunEventQueue, classifyExecOutcome } from './events.ts'
+import { readCodexModelCatalog } from './models.ts'
 import {
   DEFAULT_TASK_TAIL_BYTES,
   DEFAULT_TRANSCRIPT_TAIL_BYTES,
@@ -202,7 +206,9 @@ export class CodexAdapter implements AgentAdapter {
       externalWorktree: false,
       // Codex is an MCP client through `mcp_servers` in its own config.
       mcpClient: true,
-      listModels: false,
+      // Models and providers come from `$CODEX_HOME/config.toml` and the project layers,
+      // not from a built-in list (ADR-0002).
+      listModels: true,
       sandboxProfiles: CODEX_SANDBOX_PROFILES,
       approvalModes: CODEX_APPROVAL_MODES,
       credentials: { status: true, login: CODEX_LOGIN_FLOWS, logout: true },
@@ -256,6 +262,36 @@ export class CodexAdapter implements AgentAdapter {
       nativeId,
       tailBytes: DEFAULT_TASK_TAIL_BYTES,
     })
+  }
+
+  /**
+   * Read Codex's own model and provider catalog from its configuration.
+   *
+   * Codex names its models in `config.toml` rather than shipping a list of ids, so this
+   * reads the same files Codex reads, in Codex's precedence order, and reports what the
+   * configuration names; every gap (an absent layer, a parse failure, a profile file the
+   * SPI cannot select, a `model_catalog_url` this adapter will not fetch) is declared in
+   * `notes` rather than thrown. Read-only throughout (ADR-0012), and no credential value
+   * is ever read (ADR-0010).
+   */
+  async listModels(): Promise<AgentModelCatalog> {
+    const home = await this.resolveHome()
+    const catalog = await readCodexModelCatalog({
+      files: this.files,
+      home,
+      agentId: this.agent,
+      // A credential the adapter itself injects reaches a run exactly as an inherited one
+      // does, so the configured environment counts when a provider's variable is checked.
+      env: { ...process.env, ...this.config.env },
+      projectDir: process.cwd(),
+    })
+    this.log.debug('codex model catalog read', {
+      models: catalog.models.length,
+      providers: catalog.providers.length,
+      sources: catalog.sources.length,
+      notes: catalog.notes.length,
+    })
+    return catalog
   }
 
   /** Observe authentication state without writing anything (ADR-0010). */

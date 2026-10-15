@@ -19,6 +19,8 @@ import { ProcessRunner } from './process/runner.ts'
 import { SessionIndex } from './sessions/index.ts'
 import { StateStore, resolveStateRoot } from './state/store.ts'
 import { WorktreeManager, type WorktreeOptions } from './worktree/manager.ts'
+import { MutiAgentError, ErrorCodes } from '@zorker/muti-agent-contracts'
+import type { AgentModelCatalog } from '@zorker/muti-agent-contracts'
 import { CollaborationStore } from './orchestration/collaboration.ts'
 import { RunManager, type RunManagerOptions } from './orchestration/runs.ts'
 import { CredentialService } from './credentials/service.ts'
@@ -57,11 +59,70 @@ export interface ServiceOptions {
   /** Whether credential status may fall back to an agent CLI probe. */
   probeCliCredentials?: boolean
   /**
+   * Whether a harness session has started, i.e. carries at least one event.
+   *
+   * Supplied by the plugin, which can reach the harness's session store; the domain layer
+   * cannot. It decides when a session's agent binding stops being changeable: the binding is
+   * a **choice** while a conversation has not begun and a **fact** afterwards, because the
+   * transcript, the worktree and the shared todos accumulate around one agent from the first
+   * turn onward.
+   *
+   * Omitted means "assume started", so an embedder that cannot tell keeps the stricter
+   * behaviour rather than silently allowing a re-point.
+   */
+  sessionActivity?: (sessionId: string) => boolean
+  /**
    * Concrete secrets to redact from every output. Seeded from values the user typed
    * into settings during this process's lifetime.
    */
   secrets?: readonly string[]
 }
+
+/**
+ * The reserved id meaning "the harness's own agent answers".
+ *
+ * A composer sits in one conversation, and most conversations belong to the harness's own
+ * agent; delegating is the exception. Without this value a switcher can only express which
+ * *external* agent a session uses, which reads as "every conversation must be delegated".
+ * It is not an adapter and never appears in the agent registry.
+ */
+export const HARNESS_AGENT = 'harness'
+
+/** Operator preferences MutiAgent persists across restarts. */
+export interface Preferences {
+  /**
+   * The agent a delegated run defaults to when the caller names none, and the fallback for
+   * a session that has no choice of its own.
+   *
+   * Held host-side rather than in browser storage so it follows the operator to any
+   * client, and so a script or an MCP caller sees the same default the GUI shows.
+   */
+  preferredAgent?: string
+  /**
+   * Agent chosen per harness session, keyed by session id.
+   *
+   * Per session rather than global because the control lives in one conversation's
+   * composer: a user working on two things at once must be able to send one to Codex and
+   * leave the other on the harness agent. The reserved value {@link HARNESS_AGENT} means
+   * "no delegation here".
+   *
+   * **A value, once written, is not replaceable** — see {@link MutiAgentService.setPreferences}
+   * and `session/agent-locked`.
+   */
+  agentBySession?: Readonly<Record<string, string>>
+  /**
+   * Model chosen per agent, keyed by agent id.
+   *
+   * Deliberately **not** validated against the agent's catalog: a machine's usable models
+   * include ids its configuration never names (a provider's own list, a built-in catalog),
+   * so rejecting an unknown id here would refuse a model the agent would happily run. The
+   * catalog is a menu, not a whitelist.
+   */
+  preferredModelByAgent?: Readonly<Record<string, string>>
+}
+
+/** Where preferences live inside the state directory. */
+const PREFERENCES_PATH = 'preferences.json'
 
 /** Concrete adapters are constructed by the plugin, because each needs its own config type. */
 export type AdapterFactory = (context: AdapterContext) => AgentAdapter
@@ -193,6 +254,156 @@ export class MutiAgentService {
     const worktrees = await this.worktrees.sampleAll(this.runs.active().map(record => String(record.id)))
     const conflicts = await this.worktrees.conflicts(repoRoot)
     return { worktrees, conflicts }
+  }
+
+  /**
+   * The model and provider catalog for one agent, or for every agent.
+   *
+   * A per-agent read failure is reported inside that agent's catalog as a declared gap
+   * rather than thrown, because one agent with an unreadable config must not hide the
+   * other two.
+   *
+   * @param agentIds - Agents to read; omitted reads every registered agent.
+   * @returns One catalog per requested agent, in registry order.
+   */
+  async modelCatalogs(agentIds?: readonly string[]): Promise<readonly AgentModelCatalog[]> {
+    const requested = agentIds ?? this.registry.ids()
+    const catalogs: AgentModelCatalog[] = []
+    for (const agentId of requested) {
+      const adapter = this.registry.get(agentId)
+      if (adapter === undefined) {
+        catalogs.push({
+          agentId: agentId as AgentModelCatalog['agentId'],
+          providers: [],
+          models: [],
+          sources: [],
+          notes: [{ field: '*', reason: `agent "${agentId}" is not available in this process` }],
+          observedAt: new Date().toISOString(),
+        })
+        continue
+      }
+      try {
+        catalogs.push(await adapter.listModels())
+      } catch (cause) {
+        this.log.warn(`reading the model catalog for ${agentId} failed`, {
+          error: cause instanceof Error ? cause.message : String(cause),
+        })
+        catalogs.push({
+          agentId: agentId as AgentModelCatalog['agentId'],
+          providers: [],
+          models: [],
+          sources: [],
+          notes: [{
+            field: '*',
+            reason: `the catalog could not be read: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }],
+          observedAt: new Date().toISOString(),
+        })
+      }
+    }
+    return catalogs
+  }
+
+  /**
+   * Whether a session has begun.
+   *
+   * @param sessionId - Harness session id.
+   * @returns Whether the session carries activity, using the probe the plugin supplied.
+   */
+  sessionStarted(sessionId: string): boolean {
+    return this.options.sessionActivity?.(sessionId) ?? true
+  }
+
+  /**
+   * Which of these sessions have begun.
+   *
+   * @param sessionIds - Candidate session ids.
+   * @returns The subset that has activity, so a client can render a binding as settled
+   *   without having to attempt a change and be refused.
+   */
+  startedSessions(sessionIds: readonly string[]): readonly string[] {
+    return sessionIds.filter(sessionId => this.sessionStarted(sessionId))
+  }
+
+  /** The stored operator preferences. */
+  async preferences(): Promise<Preferences> {
+    return (await this.state.readJson<Preferences>(PREFERENCES_PATH)) ?? {}
+  }
+
+  /**
+   * Merge preferences and persist the result.
+   *
+   * @param patch - The fields to change.
+   * @param actor - Who asked, recorded in the audit journal.
+   * @returns The stored preferences after the change.
+   * @throws {MutiAgentError} `schema/invalid` when the patch names an agent this process
+   *   does not know — a preference pointing at a nonexistent agent would silently make
+   *   every later default fail.
+   */
+  async setPreferences(patch: Preferences, actor: string): Promise<Preferences> {
+    if (
+      patch.preferredAgent !== undefined
+      && patch.preferredAgent !== HARNESS_AGENT
+      && !this.registry.has(patch.preferredAgent)
+    ) {
+      throw new MutiAgentError(
+        ErrorCodes.schemaInvalid,
+        `no agent "${patch.preferredAgent}" is registered in this process`,
+        {
+          details: { agentId: patch.preferredAgent, registered: this.registry.ids().join(',') },
+          remediation: 'Choose one of the agents listed by agents.list.',
+        },
+      )
+    }
+    for (const agentId of Object.values(patch.agentBySession ?? {})) {
+      if (agentId === HARNESS_AGENT || this.registry.has(agentId)) continue
+      throw new MutiAgentError(
+        ErrorCodes.schemaInvalid,
+        `no agent "${agentId}" is registered in this process`,
+        {
+          details: { agentId, registered: [...this.registry.ids(), HARNESS_AGENT].join(',') },
+          remediation: 'Choose one of the agents listed by agents.list, or the reserved "harness".',
+        },
+      )
+    }
+    for (const agentId of Object.keys(patch.preferredModelByAgent ?? {})) {
+      if (this.registry.has(agentId)) continue
+      throw new MutiAgentError(
+        ErrorCodes.schemaInvalid,
+        `no agent "${agentId}" is registered in this process`,
+        {
+          details: { agentId, registered: this.registry.ids().join(',') },
+          remediation: 'Choose one of the agents listed by agents.list.',
+        },
+      )
+    }
+    // A session's agent may be changed while the conversation has not begun, and not after.
+    // The refusal lives here rather than in the control because the rule is about the session
+    // rather than about one client: an MCP caller must not re-point a conversation whose work
+    // is already under way either.
+    const existing = await this.preferences()
+    for (const [sessionId, agentId] of Object.entries(patch.agentBySession ?? {})) {
+      const bound = existing.agentBySession?.[sessionId]
+      if (bound === undefined || bound === agentId) continue
+      if (!this.sessionStarted(sessionId)) continue
+      throw new MutiAgentError(
+        ErrorCodes.sessionAgentLocked,
+        `session ${sessionId} has started and is bound to ${bound}`,
+        {
+          details: { sessionId, bound, requested: agentId },
+          remediation: 'Start a new conversation to use another agent; a conversation already under way keeps the agent it began with.',
+        },
+      )
+    }
+    const next: Preferences = { ...(await this.preferences()), ...patch }
+    await this.state.writeJson(PREFERENCES_PATH, next)
+    this.state.appendJournal({
+      at: new Date().toISOString(),
+      kind: 'preferences.set',
+      actor,
+      detail: { keys: Object.keys(patch).join(',') },
+    })
+    return next
   }
 
   /** Path of the state directory, for display. */

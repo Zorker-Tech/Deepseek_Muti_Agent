@@ -20,6 +20,7 @@
 import type {
   AgentAuthState,
   AgentCapabilities,
+  AgentModelCatalog,
   AgentDescriptor,
   AgentMessage,
   AgentRunEvent,
@@ -212,6 +213,18 @@ export interface AgentAdapter {
    *   task model or the session records none.
    */
   readNativeTasks(nativeId: NativeSessionId): Promise<NativeTaskState | undefined>
+  /**
+   * Read this agent's model and provider catalog.
+   *
+   * Read from the agent's own configuration files, which is where a machine's models and
+   * endpoints are usually declared — a catalog built from the product's built-in list
+   * would be wrong about what this machine can actually run. Read-only, and a parse
+   * failure is a declared gap.
+   *
+   * @returns The catalog. An adapter whose agent has no model selection returns an empty
+   *   catalog with a note rather than throwing.
+   */
+  listModels(): Promise<AgentModelCatalog>
   /** Observed authentication state. Never returns secret material. */
   authStatus(): Promise<AgentAuthState>
   /** Start a credential flow through the native CLI. */
@@ -237,6 +250,7 @@ export function canonicalSessionKey(agentId: string, nativeId: string): string {
 export type {
   AgentAuthState,
   AgentCapabilities,
+  AgentModelCatalog,
   AgentDescriptor,
   AgentMessage,
   AgentRunEvent,

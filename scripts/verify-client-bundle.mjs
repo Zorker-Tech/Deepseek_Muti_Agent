@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const bundlePath = join(root, 'packages', 'plugin', 'lib', 'client.js')
 const PACKAGE_NAME = '@zorker/muti-agent-plugin'
-const EXPECTED_SLOTS = ['sidebar.panellist', 'main', 'settings.section', 'shell.overlay']
+const EXPECTED_SLOTS = ['sidebar.panellist', 'main', 'settings.section', 'shell.overlay', 'conversation.input.right']
 
 const failures = []
 const notes = []
@@ -54,6 +54,10 @@ const documentStub = {
 }
 const reactStub = {
   createElement: (type, props, ...children) => ({ type, props, children }),
+  // The composer control reuses the harness's Menu primitive; the stub returns markers
+  // so a registration that forgets to pass it through still throws.
+  Menu: 'Menu',
+  StateDot: 'StateDot',
   Fragment: 'Fragment',
   useState: value => [value, () => {}],
   useEffect: () => {},
@@ -75,6 +79,11 @@ const globalScope = {
 const requireStub = specifier => {
   if (specifier === 'react') return reactStub
   if (specifier === 'react/jsx-runtime') return { jsx: reactStub.createElement, jsxs: reactStub.createElement, Fragment: 'Fragment' }
+  // The module table serves the harness's own primitives; a bare specifier here stands in
+  // for that table so the bundle's `require` calls are exercised.
+  if (specifier === '@deepseek-ai/dsh-client-ui-primitives') {
+    return { Menu: reactStub.Menu, StateDot: reactStub.StateDot }
+  }
   throw new Error(`unexpected require(${JSON.stringify(specifier)})`)
 }
 
@@ -133,6 +142,15 @@ for (const key of EXPECTED_SLOTS) {
 }
 const panelRows = registered.filter(entry => entry.options?.name === 'sidebar.panellist')
 check(panelRows.length === 2, 'two sidebar panel rows are contributed', panelRows.length)
+const composerRows = registered.filter(entry => entry.options?.name === 'conversation.input.right')
+// One control only. The model selector in the composer stays the harness's own; this plugin
+// contributes an agent switcher and reads agent models as data, not as a second dropdown.
+check(composerRows.length === 1, 'the composer contributes exactly one control', composerRows.length)
+check(
+  composerRows[0]?.options?.id === 'mutiagent-agent',
+  'the composer control is the agent switcher',
+  composerRows[0]?.options?.id,
+)
 const styles = listeners.filter(node => node.tag === 'style')
 check(styles.length === 1, 'exactly one stylesheet is injected', styles.length)
 check(styles[0]?.textContent?.includes('--dsw-'), 'the stylesheet uses the harness theme tokens')

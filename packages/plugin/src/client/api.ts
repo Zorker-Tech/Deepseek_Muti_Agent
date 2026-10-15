@@ -60,6 +60,9 @@ export type RpcMethod =
   | 'credentials.logout'
   | 'agents.diagnostics'
   | 'agents.launch_command'
+  | 'preferences.get'
+  | 'preferences.set'
+  | 'models.list'
 
 /** Sort orders `sessions.list` and `sessions.partitions` accept. */
 export type SessionSort = 'updated' | 'created' | 'title'
@@ -703,6 +706,40 @@ export class RpcClient {
   }
 
   /**
+   * @param options - Cancellation.
+   * @returns The stored operator preferences.
+   */
+  async preferencesGet(options: RpcCallOptions = {}): Promise<PreferencesSnapshot> {
+    return await this.call<PreferencesSnapshot>('preferences.get', {}, options)
+  }
+
+  /**
+   * @param params - The fields to change.
+   * @param options - Cancellation.
+   * @returns The stored preferences after the change.
+   */
+  async preferencesSet(
+    params: {
+      preferredAgent?: string
+      sessionAgent?: { sessionId: string; agentId: string }
+      preferredModel?: { agentId: string; model: string }
+    },
+    options: RpcCallOptions = {},
+  ): Promise<PreferencesSnapshot> {
+    return await this.call<PreferencesSnapshot>('preferences.set', { ...params }, options)
+  }
+
+  /**
+   * @param params - Agents to read; omitted reads all of them.
+   * @param options - Cancellation.
+   * @returns One catalog per agent, each carrying its own declared gaps.
+   */
+  async modelsList(params: { agentIds?: readonly string[] } = {}, options: RpcCallOptions = {}): Promise<readonly ModelCatalog[]> {
+    const result = await this.call<{ catalogs: readonly ModelCatalog[] }>('models.list', { ...params }, options)
+    return result.catalogs
+  }
+
+  /**
    * @param params - Agent, and the native session id to resume.
    * @param options - Cancellation.
    * @returns The argv that opens the agent's own UI.
@@ -713,6 +750,59 @@ export class RpcClient {
   ): Promise<LaunchCommand> {
     return await this.call<LaunchCommand>('agents.launch_command', { ...params }, options)
   }
+}
+
+/** The operator preferences MutiAgent persists, as the host stores them. */
+export interface Preferences {
+  /** Agent a delegated run defaults to when the caller names none. */
+  readonly preferredAgent?: string
+  /** Model chosen per agent, keyed by agent id. */
+  readonly preferredModelByAgent?: Readonly<Record<string, string>>
+  /** Agent bound to a harness session, keyed by session id. */
+  readonly agentBySession?: Readonly<Record<string, string>>
+}
+
+/** One provider an agent's configuration declares. */
+export interface ModelCatalogProvider {
+  readonly id: string
+  readonly name?: string
+  readonly baseUrl?: string
+  readonly apiKeyEnv?: string
+  readonly credentialPresent?: boolean
+  readonly wireApi?: string
+  readonly source: string
+}
+
+/** One model an agent accepts, as its configuration declares it. */
+export interface ModelCatalogEntry {
+  readonly id: string
+  readonly displayName?: string
+  readonly providerId?: string
+  readonly isDefault?: boolean
+  readonly contextWindow?: number
+  readonly source: string
+}
+
+/** One agent's model and provider catalog. */
+export interface ModelCatalog {
+  readonly agentId: string
+  readonly defaultModel?: string
+  readonly providers: readonly ModelCatalogProvider[]
+  readonly models: readonly ModelCatalogEntry[]
+  readonly sources: readonly { readonly path: string; readonly present: boolean; readonly note?: string }[]
+  readonly notes: readonly { readonly field: string; readonly reason: string }[]
+  readonly observedAt: string
+}
+
+/** What `preferences.get` answers: the stored preferences plus which bindings have settled. */
+export interface PreferencesSnapshot extends Preferences {
+  /**
+   * Bound sessions that have already begun.
+   *
+   * A binding may be changed while its conversation has not started; from the first turn it
+   * is fixed. The host decides that, so it reports it rather than letting a client guess.
+   */
+  readonly startedSessions: readonly string[]
 }
 
 /** The kinds the host publishes on the mesh stream. */

@@ -16,6 +16,7 @@ import type {
   AgentCapabilities,
   AgentDescriptor,
   AgentMessage,
+  AgentModelCatalog,
   AgentRunEvent,
   AgentSession,
   AgentTransport,
@@ -44,6 +45,7 @@ import { Redactor, buildEnvironment, detectionFrom, jsonLines, probeVersion, res
 import { GROK_MANAGED_ENV_KEYS, GrokAuthService } from './auth.ts'
 import { classifyGrokFailure, createStreamState, mapStreamingJsonLine } from './events.ts'
 import type { GrokStreamState } from './events.ts'
+import { readGrokModelCatalog } from './models.ts'
 import {
   findGrokSessionDir,
   listGrokSessions,
@@ -201,6 +203,27 @@ export class GrokAdapter implements AgentAdapter {
       files: this.ctx.files,
       sessionDir: dir.dir,
       observedIn: sessionKey(agentId(GROK_ID), nativeSessionId(String(nativeId))),
+    })
+  }
+
+  /**
+   * Read grok's configured model and provider catalog.
+   *
+   * Read from grok's own configuration files in grok's precedence order, the
+   * `GROK_CONFIG`/`GROK_CONFIG_PATH` overlays, and the credential store's presence;
+   * no network call is made, so the catalog is the configured subset of what the
+   * endpoint serves (ADR-0002, ADR-0012).
+   *
+   * @returns The catalog; an absent or unparseable file is a declared gap, never an error.
+   */
+  async listModels(): Promise<AgentModelCatalog> {
+    const { paths } = await this.detect()
+    return await readGrokModelCatalog({
+      files: this.ctx.files,
+      paths,
+      hostEnv: process.env,
+      cwd: process.cwd(),
+      log: this.ctx.log,
     })
   }
 

@@ -7,6 +7,10 @@
  * declared as an unavailable transport: it needs a long-lived duplex session, which is the
  * per-adapter opt-in ADR-0003 describes, not part of this pass.
  *
+ * The model catalog comes from pi's own files (`models.json` providers and their models,
+ * `settings.json`'s default model and enabled scope); pi's built-in catalog is deliberately
+ * never read, so the catalog describes what this machine is configured to run.
+ *
  * Three verified behaviours shape `run()`:
  *
  * - The prompt is written to **stdin**, never argv: that keeps it out of the process table
@@ -37,6 +41,7 @@ import {
   type AgentCapabilities,
   type AgentDescriptor,
   type AgentId,
+  type AgentModelCatalog,
   type AgentRunEvent,
   type AgentSession,
   type AuthOperationResult,
@@ -67,6 +72,7 @@ import {
 } from '@zorker/muti-agent-core'
 import { loginPi, logoutPi, readPiAuthStatus } from './auth.ts'
 import { PiRunProjection } from './events.ts'
+import { readPiModelCatalog } from './models.ts'
 import {
   findPiSessionFile,
   listPiSessions,
@@ -268,16 +274,30 @@ export class PiAdapter implements AgentAdapter {
   }
 
   /**
-   * List the models pi can currently reach.
+   * Read the model and provider catalog from pi's own configuration files. Read-only.
    *
-   * This is an extra beyond the SPI, which declares the capability but has no method yet:
-   * `capabilities().listModels` is backed by `pi --list-models`, run offline so the probe
-   * neither refreshes catalogs nor blocks on the network.
+   * This is the SPI's catalog: `models.json` providers and their models, the
+   * `modelOverrides` a provider declares, and the default model and enabled scope from
+   * `settings.json`. Pi's built-in catalog is deliberately not read, so the result is the
+   * configured subset; every read says so in `notes`.
+   *
+   * @returns The catalog, with every declared gap.
+   */
+  async listModels(): Promise<AgentModelCatalog> {
+    return readPiModelCatalog(this.ctx, this.agent, { env: this.storeEnv() })
+  }
+
+  /**
+   * Ask pi itself for the models it can currently reach.
+   *
+   * This is an extra beyond the SPI: it runs `pi --offline --list-models`, so it neither
+   * refreshes catalogs nor blocks on the network, and it covers models pi ships that no
+   * configuration file declares. The file-based {@link listModels} needs no process.
    *
    * @param search - Optional fuzzy search pattern, passed to pi verbatim.
    * @returns Parsed rows plus declared gaps.
    */
-  async listModels(search?: string): Promise<PiModelListing> {
+  async listNativeModels(search?: string): Promise<PiModelListing> {
     const layout = await this.layout()
     const outcome = await this.ctx.process.run({
       command: this.binaryPath(),

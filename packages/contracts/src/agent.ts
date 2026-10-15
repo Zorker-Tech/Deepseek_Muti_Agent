@@ -47,7 +47,12 @@ export interface AgentCapabilities {
   externalWorktree: boolean
   /** Whether the agent is an MCP client and can therefore pull the shared board. */
   mcpClient: boolean
-  /** Whether the agent exposes a model/provider listing MutiAgent can surface. */
+  /**
+   * Whether the adapter can produce a model and provider catalog for this agent.
+   *
+   * True for an adapter that reads the agent's own configuration, which is where most
+   * models and endpoints are actually declared.
+   */
   listModels: boolean
   /** Sandbox profile names the agent accepts, when it has a sandbox. */
   sandboxProfiles: readonly string[]

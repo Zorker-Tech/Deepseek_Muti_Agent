@@ -126,6 +126,12 @@ export const ErrorCodes = {
   sessionUnreadable: 'session/unreadable',
   sessionRootMissing: 'session/root-missing',
   sessionReadCapExceeded: 'session/read-cap-exceeded',
+  /**
+   * A session's agent is chosen once and then fixed: the transcript, the worktree and the
+   * shared todos accumulate around one agent, so changing it mid-conversation would mix two
+   * contexts and put two agents in one working tree.
+   */
+  sessionAgentLocked: 'session/agent-locked',
 
   runStartFailed: 'run/start-failed',
   runAgentCrashed: 'run/agent-crashed',

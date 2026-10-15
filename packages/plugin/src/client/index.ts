@@ -22,10 +22,14 @@ import { AgentsGlyph, MeshGlyph } from './icons.tsx'
 import { ToastStack } from './components/Toast.tsx'
 import { RENDER_CAP, SessionsView } from './views/SessionsView.tsx'
 import { MeshView } from './views/MeshView.tsx'
+import { AgentSelect } from './views/AgentSelect.tsx'
 import { SettingsSection } from './views/SettingsSection.tsx'
 
 /** The sidebar row id and the matching `main` panel key of the sessions browser. */
-export const SESSIONS_PANEL_ID = 'mutiagent'
+export /** The composer switcher's slot-entry id, kept apart from the two panel rows. */
+const COMPOSER_AGENT_ID = 'mutiagent-agent'
+
+const SESSIONS_PANEL_ID = 'mutiagent'
 
 /** The sidebar row id and the matching `main` panel key of the orchestration view. */
 export const MESH_PANEL_ID = 'mutiagent-mesh'
@@ -65,9 +69,14 @@ export interface SlotRegistrationOptions {
   /**
    * The registrant's injected props, spread into the component.
    *
+   * A session-scoped slot hands the occupant its conversation by calling this with the
+   * session id — the mechanism the harness's own composer controls use, and the reason an
+   * agent choice can be stored against one conversation rather than globally.
+   *
+   * @param sessionId - The conversation this entry belongs to, for a session-scoped slot.
    * @returns The props the framework adds to this entry's component.
    */
-  readonly inject?: () => object
+  readonly inject?: (sessionId: string) => object
 }
 
 /**
@@ -151,6 +160,21 @@ export function apply(ctx: ClientContext): SlotDisposer {
   )
 
   const disposers: SlotDisposer[] = [
+    // Agent switcher in the composer, right of the access-mode switcher. Guarded by
+    // `slots.inject`, so a client without the conversation package simply never mounts it.
+    ctx.slots.inject('conversation.input.right', () =>
+      ctx.slots.register(
+        {
+          name: 'conversation.input.right',
+          id: COMPOSER_AGENT_ID,
+          order: 10,
+          // The session id arrives through the inject face, which is how a session-scoped
+          // slot hands an occupant the conversation it belongs to.
+          inject: (sessionId: string) => ({ api, sessionId }),
+        },
+        AgentSelect,
+      ),
+    ),
     // Agent Sessions: the panel row and the page it addresses.
     ctx.slots.inject('sidebar.panellist', () =>
       ctx.slots.register(

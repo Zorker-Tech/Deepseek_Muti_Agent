@@ -11,6 +11,7 @@ import { createPiAdapter } from '@zorker/muti-agent-adapter-pi'
 const adapter = createPiAdapter(ctx)
 await adapter.describe()
 await adapter.listSessions({ cwd: '/repo', limit: 20 })
+await adapter.listModels()
 await adapter.run({ runId, cwd: '/repo', prompt, isolation: 'shared-cwd' })
 ```
 
@@ -120,6 +121,84 @@ abandoned branches are excluded from the linear reading and counted in a note;
 
 No credential value is ever read into a projection, logged, or placed in argv.
 
+## Model and provider catalog (`listModels`)
+
+`listModels()` implements the SPI's catalog method by reading Pi's own configuration files
+(ADR-0002). It is read-only, needs no process and makes no network call: a missing file, a
+missing agent directory or a malformed `models.json` degrades into a `sources` entry plus a
+`ProjectionNote`, never an error.
+
+Files read for one catalog:
+
+| File | Read for | Tier |
+|---|---|---|
+| `<agent-dir>/models.json` | `providers`: each provider's `name`, `baseUrl`, `api`, `apiKey` shape, `models`, and `modelOverrides` | agent |
+| `<agent-dir>/settings.json` | `defaultProvider`, `defaultModel`, `enabledModels`, `defaultProjectTrust`; `defaultThinkingLevel`, `modelThinkingLevels` and `thinkingBudgets` are read only to declare their loss | agent |
+| `<agent-dir>/auth.json` | which providers hold a stored credential (classified by `auth.ts`; no value is read) | agent |
+| `<agent-dir>/trust.json` | whether the project tier is trusted, so Pi would load it | agent |
+| `<cwd>/.pi/settings.json` | the same settings keys, merged over the agent values when the project is trusted | project |
+| `<cwd>/.pi/models.json` | nothing: Pi reads `models.json` from the agent directory only, so a project-tier file is checked, reported and deliberately not projected | project |
+
+Projection:
+
+| Canonical field | Pi source | Loss / note |
+|---|---|---|
+| `AgentProvider.id` | the `providers` key | none |
+| `name`, `baseUrl`, `wireApi` | provider `name`, `baseUrl`, `api` | none |
+| `apiKeyEnv` | the single `$NAME`/`${NAME}` an `apiKey` references; for a provider that declares none, the variable Pi resolves for a well-known provider (the map from Pi's `env-api-keys.ts`, mirrored here) | a literal or `!command` `apiKey` names no variable, so this is absent |
+| `credentialPresent` | the referenced variable is set, or `auth.json` holds a credential for the provider, or a literal/`!command` `apiKey` is declared | an expired stored OAuth credential still counts as present: Pi refreshes it on the next request |
+| `AgentModel.id` | `models[].id`, or a `modelOverrides` key, **verbatim** | `--model` accepts `provider/id` with an optional `:<thinking>` suffix; the catalog never rewrites an id |
+| `displayName` | `name` (the `modelOverrides` entry wins) | Pi defaults the display name to the id; the catalog leaves it absent rather than restating the id |
+| `providerId` | the provider the entry sits under | none |
+| `isDefault` | `settings.defaultModel` (+ `defaultProvider`) | set only while the saved default is inside an `enabledModels` scope; Pi otherwise starts from that scope's first model, which may be a built-in model this reader cannot identify |
+| `contextWindow` | `contextWindow` (override wins) | Pi defaults an omitted value to 128000; the default is not restated |
+| `reasoningEfforts` | `reasoning` and `thinkingLevelMap` through Pi's `getSupportedThinkingLevels` | reported only when the configuration says something about thinking (`reasoning` false → `off`; `xhigh`/`max` only when mapped) |
+| `source` | `config` for a `models` entry and a settings-only default; `catalog` for a `modelOverrides`-only entry | no entry is ever `builtin` or `env`: the built-in catalog is not read, and a credential is not a model |
+| `AgentModelCatalog.defaultModel` | `settings.defaultModel`, merged project-over-agent | reported from settings; when an `enabledModels` scope excludes it, Pi starts from that scope's first model instead, which a note records |
+| `providers`, `models`, `sources`, `notes`, `observedAt` | this reader | — |
+
+Every declared loss, gathered:
+
+- **Pi's built-in catalog is not read.** Pi ships a generated model list and can overlay a
+  newer one from pi.dev; neither is imported or fetched. The catalog is therefore the
+  configured subset — exactly what a user's own `models.json` and `settings.json` change —
+  and every read states this in `notes`.
+- **`enabledModels` is a scope, not availability.** When it is configured, the model list
+  is filtered to it and the note says Pi still accepts an excluded id passed explicitly.
+  Pi also starts from the scope's first model when the saved default falls outside it, so
+  `isDefault` follows that rule and a default outside the scope is reported as a note.
+- **Fuzzy pattern matching is not reproduced.** Pi resolves `--models`/`enabledModels`
+  entries as exact ids, fuzzy partial names and case-insensitive globs; this reader supports
+  exact ids and globs (`*`, `?`, `[…]`), stripping an optional `:<thinking>` suffix. When
+  nothing matches, the note says the patterns most likely name built-in models.
+- **`models.json` is parsed as strict JSON.** Pi strips `//` comments before parsing; this
+  reader uses the probe's JSON parse, so a commented file becomes a parse-failure note and
+  contributes nothing (the rest of the catalog is still returned).
+- **Pi rejects a schema-invalid `models.json` whole; this reader recovers.** A malformed
+  provider or model entry is skipped and counted in a note, and the valid entries are still
+  projected, because a declared gap is more useful than an empty catalog.
+- **Keys with no canonical field are declared, not dropped.** Provider `headers`, `compat`,
+  `oauth`, `authHeader`; model `api`, `baseUrl`, `input` (the image capability), `inputLimits`,
+  `cost`, `promptCache`, `maxTokens`, `samplingParams`, `samplingParamsByThinkingLevel`,
+  `headers`, `compat`; settings `defaultThinkingLevel`, `modelThinkingLevels`,
+  `thinkingBudgets`. Each is named in a note only when it is configured.
+- **A `modelOverrides`-only model is `source: 'catalog'`.** It patches a model Pi ships,
+  which this reader cannot enumerate, so the entry carries only the metadata the override
+  itself declares.
+- **Secrets never appear.** An `apiKey` is classified by shape only (`$NAME`/`${NAME}`
+  references, Pi's `$$`/`$!` escapes, a literal, or a leading `!command`): a reference sets
+  `apiKeyEnv` and `credentialPresent` from whether that variable is set, and a literal or
+  `!command` form is reported as *declared* in a note. The command is never run, and a
+  `!command` key in `auth.json` is reported the same way. `auth.json` is read through the
+  same classifier as `authStatus()`; only provider names and kinds are projected.
+- **Project trust mirrors Pi.** `trust.json`'s nearest entry for an ancestor of the cwd wins,
+  else `defaultProjectTrust` (whose `ask` cannot be answered by a read-only caller, so an
+  unrecorded project is treated as untrusted). Pi canonicalizes trust paths; this reader
+  compares resolved paths, so a symlinked cwd may not match an entry.
+- **A default model that no entry declares is added from settings alone** (`source: 'config'`,
+  `providerId` from `defaultProvider`, `isDefault` while no `enabledModels` scope excludes it),
+  with a note: it is normally a built-in model, and only the id is known here.
+
 ## Why five things are absent
 
 - **Todos (none).** Pi has no todo tool: its built-in tools are `read`, `bash`,
@@ -198,9 +277,10 @@ No credential value is ever read into a projection, logged, or placed in argv.
 
 ## Extra beyond the SPI
 
-`capabilities().listModels` has no SPI method yet, so `PiAdapter.listModels(search?)` is
-exposed as an adapter-specific extra: it runs `pi --offline --list-models [search]` and
-parses the table into `{ provider, id, contextWindow, maxOutput, thinking, images }` rows.
-Rows are accepted only after pi's `provider  model  …` header, so the credential guidance pi
-prints when it has no usable provider is reported as a note instead of being parsed as
-models. `--offline` keeps the probe from refreshing catalogs or blocking on the network.
+`PiAdapter.listNativeModels(search?)` is an adapter-specific extra for models no configuration
+file declares: it runs `pi --offline --list-models [search]` and parses the table into
+`{ provider, id, contextWindow, maxOutput, thinking, images }` rows. Rows are accepted only
+after pi's `provider  model  …` header, so the credential guidance pi prints when it has no
+usable provider is reported as a note instead of being parsed as models. `--offline` keeps the
+probe from refreshing catalogs or blocking on the network. The SPI's `listModels()` is the
+file-based catalog above and needs no process at all.

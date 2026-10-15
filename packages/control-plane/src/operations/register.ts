@@ -910,6 +910,110 @@ export function buildOperations(
     }),
   })
 
+  // ---------------------------------------------------------------- models ----
+
+  add({
+    id: 'models.list',
+    summary: 'Read each agent\'s model and provider catalog from its own configuration files.',
+    params: s.objectOpt({}, {
+      agentIds: s.array(AgentParam).describeAs('Agents to read; omitted reads every registered agent.'),
+    }),
+    scope: 'read',
+    danger: 'safe',
+    exposeAsTool: true,
+    run: async (ctx, params) => ({
+      catalogs: await ctx.service.modelCatalogs(params.agentIds),
+    }),
+  })
+
+  // ----------------------------------------------------------- preferences ----
+
+  add({
+    id: 'preferences.get',
+    summary: 'Read the operator preferences MutiAgent persists, notably the default agent.',
+    params: NoParams,
+    scope: 'read',
+    danger: 'safe',
+    exposeAsTool: true,
+    run: async ctx => {
+      const preferences = await ctx.service.preferences()
+      // A binding is only settled once its conversation has begun, so the caller needs to
+      // know which of them have — otherwise a UI would show a locked control for a session
+      // that can still be changed, or offer a change the host will refuse.
+      return {
+        ...preferences,
+        startedSessions: ctx.service.startedSessions(Object.keys(preferences.agentBySession ?? {})),
+      }
+    },
+  })
+
+  add({
+    id: 'preferences.set',
+    summary: 'Store operator preferences, such as the agent a delegated run defaults to.',
+    params: s.objectOpt(
+      {},
+      {
+        preferredAgent: AgentParam.describeAs('Agent a delegated run defaults to when the caller names none.'),
+        sessionAgent: s
+          .objectOpt(
+            {
+              sessionId: s.string().min(1).describeAs('Harness session id whose composer made the choice.'),
+              agentId: s
+                .string()
+                .min(1)
+                .describeAs('Agent for this session, or the reserved "harness" for no delegation.'),
+            },
+            {},
+          )
+          .describeAs(
+            'Bind one conversation to an agent. The binding is fixed once set: a later call '
+            + 'naming a different agent for the same session is refused with session/agent-locked.',
+          ),
+        preferredModel: s
+          .objectOpt(
+            {
+              agentId: AgentParam,
+              model: s.string().min(1).describeAs('Model id as the agent accepts it on its command line.'),
+            },
+            {},
+          )
+          .describeAs('Record the model an agent should run by default.'),
+      },
+    ),
+    scope: 'mutate',
+    danger: 'safe',
+    exposeAsTool: true,
+    run: async (ctx, params) => {
+      const patch: {
+        preferredAgent?: string
+        agentBySession?: Record<string, string>
+        preferredModelByAgent?: Record<string, string>
+      } = {}
+      if (params.preferredAgent !== undefined) patch.preferredAgent = params.preferredAgent
+      if (params.sessionAgent !== undefined) {
+        const current = await ctx.service.preferences()
+        patch.agentBySession = {
+          ...current.agentBySession,
+          [params.sessionAgent.sessionId]: params.sessionAgent.agentId,
+        }
+      }
+      if (params.preferredModel !== undefined) {
+        const current = await ctx.service.preferences()
+        patch.preferredModelByAgent = {
+          ...current.preferredModelByAgent,
+          [params.preferredModel.agentId]: params.preferredModel.model,
+        }
+      }
+      const stored = await ctx.service.setPreferences(patch, ctx.actor.id)
+      // The same shape `preferences.get` answers, so a caller that just wrote a binding
+      // learns whether it settled from the write itself rather than a second round trip.
+      return {
+        ...stored,
+        startedSessions: ctx.service.startedSessions(Object.keys(stored.agentBySession ?? {})),
+      }
+    },
+  })
+
   // ------------------------------------------------------------- native UI ----
 
   add({

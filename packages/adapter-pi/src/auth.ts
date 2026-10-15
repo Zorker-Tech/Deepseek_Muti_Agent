@@ -86,13 +86,14 @@ export const PI_LOGOUT_INSTRUCTIONS =
   'Pi has no non-interactive logout; run `pi` and use /logout, or remove the provider entry from its auth.json.'
 
 /** How a stored credential can be used, with no secret material. */
-type CredentialKind = 'oauth' | 'api_key' | 'command'
+export type PiCredentialKind = 'oauth' | 'api_key' | 'command'
 
-interface ObservedCredential {
+/** One provider's stored credential, classified without reading any secret value. */
+export interface PiStoredCredential {
   /** Provider id, verbatim. */
   provider: string
   /** How pi would resolve it. */
-  kind: CredentialKind
+  kind: PiCredentialKind
   /** Whether it can authenticate a request right now. */
   usable: boolean
   /** Expiry in milliseconds, for an OAuth credential. */
@@ -100,7 +101,7 @@ interface ObservedCredential {
 }
 
 interface CredentialObservation {
-  credentials: readonly ObservedCredential[]
+  credentials: readonly PiStoredCredential[]
   /** Entries that were present but not recognizable as a credential. */
   malformed: number
   /** Whether the file existed and parsed as a JSON object. */
@@ -216,6 +217,26 @@ export async function readPiAuthStatus(
 }
 
 /**
+ * Read and classify the credentials pi's `auth.json` holds.
+ *
+ * This is the model catalog's entry point: it needs to know which providers have a stored
+ * credential and whether one is a `!command` reference, never a value. It reuses the same
+ * classification as {@link readPiAuthStatus}, so both agree on what counts as a credential.
+ *
+ * @param ctx - Adapter context.
+ * @param credentialPath - Path of `auth.json`.
+ * @param now - Observation time in milliseconds, for classifying OAuth expiry.
+ * @returns One entry per recognizable credential; empty when the file is absent or unreadable.
+ */
+export async function readPiCredentials(
+  ctx: AdapterContext,
+  credentialPath: string,
+  now: number,
+): Promise<readonly PiStoredCredential[]> {
+  return (await observeCredentials(ctx, credentialPath, now)).credentials
+}
+
+/**
  * Begin a login flow. Pi exposes `/login` only inside its TUI, and this adapter
  * declares the `interactive` flow without driving a TUI (ADR-0003), so this reports
  * what a human must do instead of pretending to start a flow.
@@ -281,7 +302,7 @@ async function observeCredentials(
     return { credentials: [], malformed: 0, parsed: false, error: 'auth.json does not hold a JSON object' }
   }
 
-  const credentials: ObservedCredential[] = []
+  const credentials: PiStoredCredential[] = []
   let malformed = 0
   for (const [provider, value] of Object.entries(parsed.value)) {
     const credential = classifyCredential(provider, value, now)
@@ -292,7 +313,7 @@ async function observeCredentials(
 }
 
 /** Classify one provider's stored credential, without reading it into a projection. */
-function classifyCredential(provider: string, value: unknown, now: number): ObservedCredential | undefined {
+function classifyCredential(provider: string, value: unknown, now: number): PiStoredCredential | undefined {
   if (!isRecord(value)) return undefined
   const type = readString(value, 'type')
   if (type === 'oauth') {
@@ -317,7 +338,7 @@ function classifyCredential(provider: string, value: unknown, now: number): Obse
 }
 
 /** Name the providers and kinds observed, e.g. `anthropic(oauth), openai(api_key)`. */
-function methodLabel(credentials: readonly ObservedCredential[]): string {
+function methodLabel(credentials: readonly PiStoredCredential[]): string {
   const labels: string[] = []
   for (const credential of credentials) {
     const label = `${credential.provider}(${credential.kind})`

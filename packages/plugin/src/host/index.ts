@@ -98,8 +98,21 @@ export async function apply(
       ...(settings.model === '' ? {} : { model: settings.model }),
     }
   }
+  // The harness session store is how the plugin knows whether a conversation has begun; the
+  // domain layer cannot reach it. Read structurally: a session with at least one event has
+  // started, and a store that is absent leaves the stricter default in place.
+  const sessionsService = ctx.get('sessions') as
+    | { get?(id: string): { events?: readonly unknown[] } | undefined }
+    | undefined
+  const sessionActivity = (sessionId: string): boolean => {
+    const session = sessionsService?.get?.(sessionId)
+    if (session === undefined) return true
+    return Array.isArray(session.events) && session.events.length > 0
+  }
+
   const service = new MutiAgentService({
     adapters,
+    sessionActivity,
     logLevel: config.log.level,
     ...(config.stateDir === '' ? {} : { stateDir: config.stateDir }),
     ...(harnessHome === undefined ? {} : { harnessHome }),

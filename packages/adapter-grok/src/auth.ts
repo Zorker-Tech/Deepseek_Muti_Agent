@@ -166,6 +166,47 @@ export function grokMethodLabel(authMode: string): string {
   }
 }
 
+/** The credential store as read: presence plus the entries, never secret material. */
+export interface GrokAuthStoreRead {
+  /** Whether the store file exists. */
+  present: boolean
+  /** One entry per scope, with secret values reduced to `hasKey`. */
+  entries: readonly GrokAuthEntry[]
+  /** Why the store could not be read, when it exists but could not be. */
+  error?: string
+}
+
+/**
+ * Read the scope-keyed credential store without writing, locking or rewriting it.
+ *
+ * An absent or empty file is the signed-out state a crashed writer leaves behind, not
+ * corruption; a file that cannot be parsed is reported through {@link GrokAuthStoreRead.error}.
+ * No entry value is retained: `key` and `refresh_token` are reduced to booleans in-process.
+ *
+ * @param options - Read-only probe and the resolved credential path.
+ * @returns The store's presence, its parsed entries, and the read error when there is one.
+ */
+export async function readGrokAuthStore(options: {
+  files: FileProbe
+  credentialPath: string
+}): Promise<GrokAuthStoreRead> {
+  const read = await options.files.readHead(options.credentialPath)
+  if (read.missing) return { present: false, entries: [] }
+  // An empty file is the signed-out state a crashed writer leaves behind, not corruption.
+  const trimmed = read.text.trim()
+  if (trimmed === '') return { present: true, entries: [] }
+  if (read.truncated) {
+    return { present: true, entries: [], error: 'the credential store is larger than a single bounded read' }
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch (cause) {
+    return { present: true, entries: [], error: cause instanceof Error ? cause.message : String(cause) }
+  }
+  return { present: true, entries: parseGrokAuthStore(parsed) }
+}
+
 /** Everything the credential service needs from its adapter. */
 export interface GrokAuthDeps {
   /** Read-only filesystem helpers. */
@@ -396,22 +437,8 @@ export class GrokAuthService {
   }
 
   /** Read the credential store without writing, locking or rewriting it. */
-  private async readStore(): Promise<{ entries: readonly GrokAuthEntry[]; error?: string }> {
-    const read = await this.deps.files.readHead(this.deps.paths.credentialPath)
-    if (read.missing) return { entries: [] }
-    // An empty file is the signed-out state a crashed writer leaves behind, not corruption.
-    const trimmed = read.text.trim()
-    if (trimmed === '') return { entries: [] }
-    if (read.truncated) {
-      return { entries: [], error: 'the credential store is larger than a single bounded read' }
-    }
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(trimmed)
-    } catch (cause) {
-      return { entries: [], error: cause instanceof Error ? cause.message : String(cause) }
-    }
-    return { entries: parseGrokAuthStore(parsed) }
+  private async readStore(): Promise<GrokAuthStoreRead> {
+    return await readGrokAuthStore({ files: this.deps.files, credentialPath: this.deps.paths.credentialPath })
   }
 
   /** Confirm an otherwise empty store with the first line of `grok models`. */

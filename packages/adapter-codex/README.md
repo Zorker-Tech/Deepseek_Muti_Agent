@@ -3,11 +3,11 @@
 The MutiAgent adapter for [OpenAI Codex](https://github.com/openai/codex). It implements
 the `AgentAdapter` SPI from `@zorker/muti-agent-core` for the `codex` CLI: session
 discovery and transcript reading from `$CODEX_HOME`, run dispatch through
-`codex exec --json`, native checklist extraction, and credential delegation to
-`codex login` / `codex logout`.
+`codex exec --json`, native checklist extraction, the model and provider catalog read from
+Codex's own `config.toml`, and credential delegation to `codex login` / `codex logout`.
 
-Nothing here writes to a foreign store (ADR-0012). Rollouts, the title index and
-`auth.json` are opened read-only through `FileProbe`; the only mutations this adapter
+Nothing here writes to a foreign store (ADR-0012). Rollouts, the title index, `auth.json`
+and `config.toml` are opened read-only through `FileProbe`; the only mutations this adapter
 can cause are the ones Codex performs for itself when the CLI is asked to log in or out
 (ADR-0010).
 
@@ -38,7 +38,7 @@ can cause are the ones Codex performs for itself when the CLI is asked to log in
   "nativePlan": true,
   "externalWorktree": false,        // Codex creates its own worktree (`--worktree`); it is not told about ours
   "mcpClient": true,                // Codex reads `mcp_servers` from its own config
-  "listModels": false,
+  "listModels": true,               // read from config.toml and the project layers, never fetched
   "sandboxProfiles": ["read-only", "workspace-write", "danger-full-access"],
   "approvalModes": ["on-request", "never"],
   "credentials": { "status": true, "login": ["oauth-loopback", "device-code", "api-key"], "logout": true }
@@ -221,10 +221,62 @@ whose result is what `state` reports; a non-zero exit is returned as `ok: false`
 redacted output attached, not thrown. A flow outside the declared list throws
 `auth/login-unsupported`.
 
+## Projection table — model catalog (`listModels`)
+
+`listModels()` reads Codex's own configuration. It never runs the CLI, never fetches a
+URL, never writes a file, and never reads a secret: a credential is reported only as the
+name of the environment variable that carries it plus whether that name is set, or as the
+presence of something in the Codex auth store. `model_catalog_url` is the network form of a
+model list and is therefore *reported but never fetched*.
+
+### Which files are read, in ascending precedence
+
+| Order | File | Applied |
+|---|---|---|
+| 1 | `$CODEX_HOME/config.toml` | always; the user layer, and the only layer whose `[projects]` table decides trust. Always in `sources`, with `present: false` when absent |
+| 2 | `[profiles.<name>]` inside that file, when the file sets `profile = "<name>"` | yes, folded on top of the same file; the source note names the profile |
+| 3 | `$CODEX_HOME/<name>.config.toml` for each profile file that exists | **no**: Codex reads such a file only for a run started with `--profile <name>`, which `listModels()` cannot know. Reported with that reason |
+| 4 | `<project>/config.toml` | only when `<project>` is trusted |
+| 5 | `<dir>/.codex/config.toml` for `<project>` and every ancestor up to the file-system root, root first | only when that directory is trusted. The repository root's `.codex/config.toml` is covered by this walk whenever `<project>` sits inside a checkout |
+
+`<project>` is the host process's own working directory, which is what `${PWD}` means to
+Codex. A `.codex` directory equal to `$CODEX_HOME` is skipped, because that file is already
+the user layer.
+
+Trust comes from the user layer's `[projects."<abs path>"] trust_level` entries only: a
+directory matches an entry for itself or for the nearest ancestor that has one, under the
+path as written or under its canonical (symlink-resolved) spelling, which is how Codex
+looks it up. A trusted layer is applied and its source note says so; a layer whose
+directory is marked `untrusted`, or has no entry, is reported as present with the reason
+and contributes nothing. Trust recorded by managed (MDM) configuration is not read here.
+
+### What is projected
+
+| Native source | Canonical field |
+|---|---|
+| `model`, highest-precedence layer winning | `defaultModel`, and one `AgentModel` with `isDefault: true`, `source: "config"` |
+| `model_provider` (user and profile layers only) | `providerId` on the default model |
+| `model_context_window` | `contextWindow` on the default model |
+| `review_model` | one further `AgentModel`, `source: "config"` |
+| `model_catalog_json`, a JSON file on this machine (relative paths resolve against the directory of the file that named it) | one `AgentModel` per `models[].slug`, `source: "catalog"`, with `display_name`, `context_window` and `supported_reasoning_levels[].effort` |
+| `[model_providers.<id>]`, merged key by key across layers | one `AgentProvider`, `source: "config"`, from `name`, `base_url`, `env_key` → `apiKeyEnv` and `wire_api` |
+| `env_key` | `apiKeyEnv` is the variable *name*; `credentialPresent` is whether that name is set in the host environment or in this adapter's configured `env` |
+| `requires_openai_auth` (and the built-in `openai` provider) | `credentialPresent` from the Codex auth store, through the same read-only `readCodexAuthState` that `authStatus()` uses — never a value |
+| the built-in provider ids | `openai`, `lmstudio`, `ollama`, `amazon-bedrock`, `amazon-bedrock-runtime` as `AgentProvider` rows with `source: "builtin"` (`RESERVED_MODEL_PROVIDER_IDS` in this revision); a configuration cannot replace one |
+| any other key of `config.toml` | nothing; the names of the keys that were present are listed in one `notes` entry |
+
+**Why the model list is only what configuration names.** Codex has no `models` table and no
+offline list of ids: a model is identified by a free-form string that the Codex backend
+resolves. `ConfigToml` carries at most a default `model`, a `review_model` and a local
+`model_catalog_json`, so the catalog reports exactly those three sources and adds a note
+saying so. A model Codex would accept but this machine's configuration never mentions
+cannot appear in the catalog, and claiming otherwise would be an invention.
+
 ## Declared losses
 
-Every one of these is either attached to the object it affects as a `ProjectionNote`, or
-carried in `RunResult.notes` for a run.
+Every one of these is attached to the object it affects as a `ProjectionNote`, carried in a
+`RunResult.notes` list for a run, or — for a file that contributed nothing — stated on its
+`sources` row.
 
 **Sessions**
 
@@ -327,6 +379,50 @@ carried in `RunResult.notes` for a run.
     4 KiB.
 45. An environment credential cannot be logged out; MutiAgent never un-sets a variable.
 
+**Model catalog**
+
+46. Codex carries no built-in model list, so `models` holds only what this machine's
+    configuration names (`model`, `review_model`, `model_catalog_json`); a note on every
+    catalog says so.
+47. `model_catalog_url` is never fetched — this adapter makes no network call — so the
+    models it would list are absent and the URL is declared in a note.
+48. A profile-v2 file (`$CODEX_HOME/<name>.config.toml`) is reported in `sources` but not
+    applied: Codex reads it only for a run started with `--profile <name>`, and the SPI
+    carries no profile selection. A legacy `[profiles.<name>]` table selected by the
+    `profile` key *is* applied, and the source note names it.
+49. A project-local layer is applied only when the user layer records the directory as
+    trusted; an untrusted or unrecorded directory is reported with the reason, and a note
+    warns that the default model may not be the one Codex would use there. Trust recorded
+    by managed configuration is not read.
+50. A project layer's `model_provider`, `model_providers`, `profile` and `profiles` are
+    ignored exactly as Codex ignores them (`PROJECT_LOCAL_CONFIG_DENYLIST`), and the fact is
+    declared in a note.
+51. `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity` and
+    `model_auto_compact_token_limit` select how a model runs rather than naming one, and the
+    canonical catalog has no field for them; they are declared in one note.
+52. Provider keys with no canonical field (`capabilities`, `query_params`, `http_headers`,
+    `env_http_headers`, `env_key_instructions`, retries, timeouts, `requires_openai_auth`,
+    `supports_websockets`) are declared in a note per provider.
+53. `experimental_bearer_token` makes a provider count as credentialed, but its value is
+    never read; `auth`, `aws` and `gateway_oauth` credentials are neither read nor run, and
+    each is declared.
+54. A configuration file larger than the 1 MiB read cap is not projected at all: TOML is
+    line oriented, so a truncated prefix could parse and silently misreport values. The
+    `sources` row names the cap.
+55. An absent file, an unreadable file and a TOML parse failure each contribute nothing and
+    carry the reason in their `sources` row; `listModels()` never throws for any of them, and
+    a missing home is simply a set of absent files.
+56. A local `model_catalog_json` file's fields without a canonical home (`visibility`,
+    `supported_in_api`, `priority`, `description`, `shell_type`, …) are declared in a note,
+    as is any entry that carries no `slug`.
+57. `review_model` is listed as one more acceptable id because `AgentModel` has no purpose
+    field; a note says it is the review model.
+58. `defaultModel` is omitted when no layer names a model — the built-in default lives in
+    Codex's code, not in configuration — and `providerId` is omitted when no layer names a
+    provider, with a note explaining that a built-in default then applies.
+59. Duplicate ids collapse into one row: the configured default keeps its `isDefault` and
+    gains only what it lacked from a catalog file.
+
 ## Adapter settings
 
 Read from `AdapterRuntimeConfig.settings`; an unset entry is ignored and a present but
@@ -336,6 +432,11 @@ unusable one is warned about and ignored.
 |---|---|---|---|
 | `transcriptTailBytes` | positive integer | `1048576` | Bytes read from the tail of a rollout for a transcript |
 | `loginTimeoutMs` | positive integer | `600000` | Wall-clock budget for a delegated login |
+
+`listModels()` takes no settings: it reads at most 1 MiB from each candidate file, takes the
+working directory from the host process (there is no per-call `cwd` in the SPI), and adds
+`config.env` to the host environment when it tests whether a provider's `env_key` is set,
+because a run started by this adapter would receive that variable too.
 
 ## Usage
 
@@ -354,3 +455,4 @@ registry.add(adapter)
 | `src/sessions.ts` | Rollout discovery, head parsing, title index, transcript projection, native task extraction |
 | `src/events.ts` | `codex exec --json` line → `AgentRunEvent` mapping, outcome classification, the run event queue |
 | `src/auth.ts` | `auth.json` classification and `codex login` / `codex logout` delegation |
+| `src/models.ts` | `config.toml` layer discovery, TOML parsing (`smol-toml`), and the model/provider catalog projection |

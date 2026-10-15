@@ -46,6 +46,82 @@ export const LAYOUT_CSS = `
 .ma-column { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .ma-spacer { flex: 1 1 auto; }
 .ma-muted { color: var(--dsw-alias-label-tertiary, inherit); }
+/* The composer agent switcher. Metrics and tokens copied from the harness's own
+   access-mode trigger so the tool row reads as one set of controls. */
+.ma-agent-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 200px;
+  height: 28px;
+  padding: 0 4px 0 8px;
+  border: none;
+  border-radius: var(--dsw-radius-sm);
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.ma-agent-trigger:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.ma-agent-trigger:focus-visible {
+  box-shadow: 0 0 0 2px var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+}
+
+.ma-agent-trigger:disabled {
+  color: var(--dsw-alias-label-dimmed);
+  cursor: default;
+}
+
+.ma-agent-dot {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.ma-agent-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ma-agent-chevron {
+  display: inline-flex;
+  flex: 0 0 auto;
+  transition: transform 120ms ease;
+}
+
+.ma-agent-chevron--open {
+  transform: rotate(180deg);
+}
+
+.ma-agent-option {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ma-agent-option-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ma-agent-option-status {
+  flex: 0 0 auto;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
+  font-size: 11px;
+}
+
 .ma-run-status {
   display: inline-flex;
   flex-direction: column;
