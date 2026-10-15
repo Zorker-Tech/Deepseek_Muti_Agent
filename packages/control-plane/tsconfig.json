@@ -12,6 +12,7 @@
     { "path": "../core" },
     { "path": "../adapter-codex" },
     { "path": "../adapter-grok" },
-    { "path": "../adapter-pi" }
+    { "path": "../adapter-pi" },
+    { "path": "../adapter-omp" }
   ]
 }

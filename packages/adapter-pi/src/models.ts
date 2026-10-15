@@ -228,11 +228,69 @@ interface ProviderCredential {
 }
 
 /** Whether Pi would load the project tier for the directory being read. */
-interface ProjectTrust {
+export interface ProjectTrust {
   /** The decision, as Pi resolves it. */
   trusted: boolean
   /** Why the decision came out that way, for a declared note. */
   reason: string
+}
+
+/** Options for {@link resolvePiProjectTrust}. */
+export interface PiProjectTrustOptions {
+  /** Directory whose project tier the decision is about; defaults to the process working directory. */
+  cwd?: string
+  /** Environment the agent directory is resolved from; defaults to the host's. */
+  env?: NodeJS.ProcessEnv
+  /**
+   * Already-projected agent-directory settings, so a caller that read `settings.json` does
+   * not read it twice. Omitted means this call reads it.
+   */
+  agentSettings?: Pick<PiSettingsValues, 'defaultProjectTrust'>
+}
+
+/** One project-trust decision with the `sources` rows of the files it was read from. */
+export interface PiProjectTrustRead {
+  /** Whether Pi would load the project tier, and why. */
+  decision: ProjectTrust
+  /** The `sources` row for `trust.json`. */
+  trustSource: ModelSourceFile
+  /** The `sources` row for the settings file, present only when this call read it. */
+  settingsSource?: ModelSourceFile
+}
+
+/**
+ * Resolve whether Pi would load a directory's project tier, exactly as Pi does: the nearest
+ * `trust.json` entry for an ancestor of the cwd wins, else the `defaultProjectTrust`
+ * setting, whose `ask` cannot be answered by a non-interactive reader.
+ *
+ * Shared by every reader that must know whether `.pi` files apply — the model catalog and
+ * the capability inventory — so one parse decides it for both.
+ *
+ * @param ctx - Ambient services (read-only file helpers).
+ * @param options - Project directory, environment, and already-read agent settings.
+ * @returns The decision and the source rows of the files it came from.
+ */
+export async function resolvePiProjectTrust(
+  ctx: PiReadContext,
+  options: PiProjectTrustOptions = {},
+): Promise<PiProjectTrustRead> {
+  const env = options.env ?? process.env
+  const cwd = ctx.files.resolvePath(options.cwd ?? process.cwd())
+  const layout = await resolvePiStore(ctx, env)
+  const trustPath = `${layout.agentDir}/trust.json`
+  const trustFile = await readJsonObject(ctx, trustPath)
+  let agentSettings = options.agentSettings
+  let settingsSource: ModelSourceFile | undefined
+  if (agentSettings === undefined) {
+    const read = await readSettings(ctx, layout.settingsPath)
+    agentSettings = read.values
+    settingsSource = sourceOf(layout.settingsPath, read.read)
+  }
+  return {
+    decision: projectTrustFor(trustFile, cwd, agentSettings),
+    trustSource: sourceOf(trustPath, trustFile),
+    ...(settingsSource === undefined ? {} : { settingsSource }),
+  }
 }
 
 /** The model reference an `enabledModels` pattern is matched against. */
@@ -300,7 +358,6 @@ export async function readPiModelCatalogWithRoutes(
   let declarations: readonly PiLlmDeclaration[] = []
 
   const modelsPath = `${layout.agentDir}/models.json`
-  const trustPath = `${layout.agentDir}/trust.json`
   const projectSettingsPath = `${cwd}/.pi/settings.json`
   const projectModelsPath = `${cwd}/.pi/models.json`
 
@@ -326,9 +383,13 @@ export async function readPiModelCatalogWithRoutes(
   const credentialFile = await ctx.files.fingerprint(layout.credentialPath)
   draft.sources.push({ path: layout.credentialPath, present: credentialFile.size >= 0 })
 
-  const trustFile = await readJsonObject(ctx, trustPath)
-  draft.sources.push(sourceOf(trustPath, trustFile))
-  const trust = projectTrustFor(trustFile, cwd, agentSettingsFile.values)
+  const trustRead = await resolvePiProjectTrust(ctx, {
+    cwd,
+    env,
+    agentSettings: agentSettingsFile.values,
+  })
+  draft.sources.push(trustRead.trustSource)
+  const trust = trustRead.decision
 
   const projectSettingsFile = await readSettings(ctx, projectSettingsPath)
   draft.sources.push(projectSettingsSourceOf(projectSettingsPath, projectSettingsFile.read, trust))
@@ -517,7 +578,11 @@ function mergeSettings(agentSettings: PiSettingsValues, projectSettings: PiSetti
  * @param agentSettings - Agent-directory settings, the only scope `defaultProjectTrust` may live in.
  * @returns The decision and its reason.
  */
-function projectTrustFor(trustFile: JsonRead, cwd: string, agentSettings: PiSettingsValues): ProjectTrust {
+function projectTrustFor(
+  trustFile: JsonRead,
+  cwd: string,
+  agentSettings: Pick<PiSettingsValues, 'defaultProjectTrust'>,
+): ProjectTrust {
   const entries = trustFile.value
   if (entries !== undefined) {
     let directory = cwd

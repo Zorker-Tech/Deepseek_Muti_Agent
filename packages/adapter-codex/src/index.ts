@@ -31,6 +31,7 @@ import {
   sessionKey as toSessionKey,
   type AgentAuthState,
   type AgentCapabilities,
+  type AgentCapabilityInventory,
   type AgentDescriptor,
   type AgentModelCatalog,
   type AgentSession,
@@ -72,6 +73,7 @@ import {
 } from './auth.ts'
 import { CodexExecEventMapper, RunEventQueue, classifyExecOutcome } from './events.ts'
 import { readCodexModelCatalog } from './models.ts'
+import { readCodexCapabilities } from './capabilities.ts'
 import {
   DEFAULT_TASK_TAIL_BYTES,
   DEFAULT_TRANSCRIPT_TAIL_BYTES,
@@ -110,7 +112,15 @@ export type {
 } from './llm.ts'
 export { readCodexBearer } from './llm-credentials.ts'
 export type { CodexBearer, CodexBearerKind, CodexBearerRead, CodexBearerSource } from './llm-credentials.ts'
-export type { CodexConfigFact, CodexProviderAuthFacts } from './models.ts'
+export { readCodexCapabilities } from './capabilities.ts'
+export type { CodexCapabilityRead } from './capabilities.ts'
+export type {
+  CodexCapabilityFacts,
+  CodexConfigFact,
+  CodexConfigLayerFacts,
+  CodexProviderAuthFacts,
+  LayerKind,
+} from './models.ts'
 
 /** Canonical agent id. */
 export const CODEX_ID = 'codex'
@@ -327,6 +337,40 @@ export class CodexAdapter implements AgentAdapter {
       notes: catalog.notes.length,
     })
     return catalog
+  }
+
+  /**
+   * Read Codex's capability inventory from its own configuration and resource directories.
+   *
+   * The configuration pass is the same one `listModels()` makes, so the `[mcp_servers]` here
+   * and the catalog's providers come from one read of one set of layers. Skills are read from
+   * the loader's own roots (`src/capabilities.ts` documents the order), instruction files are
+   * reported by path alone — never by content — and a category this revision does not expose
+   * (the built-in tools and slash commands) is an empty list with a note naming the file that
+   * defines it. Read-only throughout, and never throws (ADR-0012).
+   *
+   * @returns The inventory.
+   */
+  async readCapabilities(): Promise<AgentCapabilityInventory> {
+    const home = await this.resolveHome()
+    const inventory = await readCodexCapabilities({
+      files: this.files,
+      home,
+      agentId: this.agent,
+      // A provider credential the adapter injects reaches a run exactly as an inherited one
+      // does, so the configured environment counts when the same read is asked about a key.
+      env: { ...process.env, ...this.config.env },
+      projectDir: process.cwd(),
+    })
+    this.log.debug('codex capability inventory read', {
+      tools: inventory.tools.length,
+      skills: inventory.skills.length,
+      mcpServers: inventory.mcpServers.length,
+      commands: inventory.commands.length,
+      contextFiles: inventory.contextFiles.length,
+      notes: inventory.notes.length,
+    })
+    return inventory
   }
 
   /** Observe authentication state without writing anything (ADR-0010). */

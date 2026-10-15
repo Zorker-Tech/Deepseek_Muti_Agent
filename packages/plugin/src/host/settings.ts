@@ -226,7 +226,7 @@ export const PluginSettingsSchema: Schema<MutiAgentPluginConfig> = s.objectOpt(
 export function resolvePluginConfig(raw: unknown): MutiAgentPluginConfig {
   const parsed = PluginSettingsSchema.parse(raw ?? {}) as Partial<MutiAgentPluginConfig>
   const agents: Record<string, AgentSettingsConfig> = {}
-  for (const key of ['codex', 'grok', 'pi']) {
+  for (const key of ['codex', 'grok', 'omp', 'pi']) {
     agents[key] = { ...AgentDefaults, ...normalizeAgent(parsed.agents?.[key]), env: normalizeEnv(parsed.agents?.[key]?.env) }
   }
   for (const [key, value] of Object.entries(parsed.agents ?? {})) {

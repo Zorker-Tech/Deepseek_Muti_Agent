@@ -51,6 +51,21 @@ importers:
         specifier: ^1.9.0
         version: 1.9.1
 
+  packages/adapter-omp:
+    dependencies:
+      '@zorker/muti-agent-contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@zorker/muti-agent-core':
+        specifier: workspace:*
+        version: link:../core
+      '@zorker/muti-agent-llm-bridge':
+        specifier: workspace:*
+        version: link:../llm-bridge
+      yaml:
+        specifier: ^2.6.1
+        version: 2.9.1
+
   packages/adapter-pi:
     dependencies:
       '@zorker/muti-agent-contracts':
@@ -99,6 +114,9 @@ importers:
       '@zorker/muti-agent-adapter-grok':
         specifier: workspace:*
         version: link:../adapter-grok
+      '@zorker/muti-agent-adapter-omp':
+        specifier: workspace:*
+        version: link:../adapter-omp
       '@zorker/muti-agent-adapter-pi':
         specifier: workspace:*
         version: link:../adapter-pi
@@ -293,6 +311,11 @@ packages:
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
+  yaml@2.9.1:
+    resolution: {integrity: sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw==}
+    engines: {node: '>= 14.6'}
+    hasBin: true
+
 snapshots:
 
   '@esbuild/aix-ppc64@0.24.2':
@@ -413,3 +436,5 @@ snapshots:
   typescript@5.9.3: {}
 
   undici-types@6.21.0: {}
+
+  yaml@2.9.1: {}

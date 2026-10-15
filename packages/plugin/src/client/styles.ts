@@ -416,6 +416,121 @@ export const SESSION_CSS = `
 }
 `
 
+/** The capability panel: a compact read-only inventory in the right sidebar. */
+export const CAPABILITIES_CSS = `
+.ma-cap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.ma-cap-head {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l1, rgb(128 128 128 / 0.16));
+}
+.ma-cap-agent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ma-cap-agent-name {
+  font: var(--dsw-font-s-14, 14px/1.5 system-ui, sans-serif);
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary, inherit);
+}
+.ma-cap-sub {
+  color: var(--dsw-alias-label-tertiary, inherit);
+  font: var(--dsw-font-xxs-12, 12px/1.5 system-ui, sans-serif);
+}
+.ma-cap-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ma-cap-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.ma-cap-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.ma-cap-section-title {
+  margin: 0;
+  font: var(--dsw-font-xs-13, 13px/1.5 system-ui, sans-serif);
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary, inherit);
+}
+.ma-cap-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.ma-cap-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: var(--dsw-radius-md, 12px);
+  background: var(--dsw-alias-bg-layer-1, rgb(128 128 128 / 0.06));
+}
+.ma-cap-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.ma-cap-name {
+  font: var(--dsw-font-xs-13, 13px/1.5 system-ui, sans-serif);
+  color: var(--dsw-alias-label-primary, inherit);
+  overflow-wrap: anywhere;
+}
+.ma-cap-desc {
+  color: var(--dsw-alias-label-secondary, inherit);
+  font: var(--dsw-font-xxs-12, 12px/1.5 system-ui, sans-serif);
+  overflow-wrap: anywhere;
+}
+.ma-cap-meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--dsw-alias-label-tertiary, inherit);
+  font: var(--dsw-font-xxxs-strong-11, 600 11px/1.5 system-ui, sans-serif);
+}
+.ma-cap-tag {
+  padding: 0 6px;
+  border-radius: var(--dsw-radius-sm, 6px);
+  background: var(--dsw-alias-bg-layer-2, rgb(128 128 128 / 0.12));
+}
+.ma-cap-path {
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.ma-cap-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+`
+
 /** The toast stack that keeps failed operations visible after a panel closes. */
 export const TOAST_CSS = `
 .ma-toasts {
@@ -450,7 +565,7 @@ export const TOAST_CSS = `
 `
 
 /** The complete sheet, in source order. */
-export const SHEET = [LAYOUT_CSS, CONTROL_CSS, SURFACE_CSS, SESSION_CSS, TOAST_CSS].join('\n')
+export const SHEET = [LAYOUT_CSS, CONTROL_CSS, SURFACE_CSS, SESSION_CSS, CAPABILITIES_CSS, TOAST_CSS].join('\n')
 
 /** The attribute that marks the plugin's single stylesheet element. */
 const STYLE_MARKER = 'mutiagent'

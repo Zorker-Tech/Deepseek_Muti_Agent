@@ -42,6 +42,19 @@ const MODULE_TABLE_BASELINE = [
 /** The package name that must appear in the module-loader registration. */
 const PACKAGE_NAME = '@zorker/muti-agent-plugin'
 
+/**
+ * A CommonJS `require` for the ESM host bundle.
+ *
+ * Some dependencies (the `yaml` parser among them) reach for `require` dynamically, which an
+ * ESM bundle cannot express; esbuild leaves the call in place and the module then fails at
+ * import time with `Dynamic require of "process" is not supported`. Providing a real
+ * `require` through `createRequire` makes those calls work instead of failing the whole
+ * adapter — which is how the oh-my-pi adapter silently failed to register.
+ */
+const CJS_REQUIRE_BANNER =
+  "import { createRequire as __mutiCreateRequire } from 'node:module';"
+  + 'const require = __mutiCreateRequire(import.meta.url);'
+
 function parseArgs(argv) {
   const options = { faces: [], minify: true }
   for (let index = 0; index < argv.length; index += 1) {
@@ -80,6 +93,7 @@ async function buildHost(minify) {
     external: ['node:*'],
     legalComments: 'none',
     logLevel: 'warning',
+    banner: { js: CJS_REQUIRE_BANNER },
   })
 }
 
@@ -97,7 +111,7 @@ async function buildMcp(minify) {
     external: ['node:*'],
     legalComments: 'none',
     logLevel: 'warning',
-    banner: { js: '#!/usr/bin/env node' },
+    banner: { js: `#!/usr/bin/env node\n${CJS_REQUIRE_BANNER}` },
   })
 }
 

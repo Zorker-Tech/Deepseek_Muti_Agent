@@ -39,6 +39,7 @@ import {
   sessionKey,
   type AgentAuthState,
   type AgentCapabilities,
+  type AgentCapabilityInventory,
   type AgentDescriptor,
   type AgentId,
   type AgentModelCatalog,
@@ -73,6 +74,7 @@ import {
 import { loginPi, logoutPi, readPiAuthStatus } from './auth.ts'
 import { PiRunProjection } from './events.ts'
 import { readPiModelCatalog } from './models.ts'
+import { readPiCapabilities } from './capabilities.ts'
 import {
   findPiSessionFile,
   listPiSessions,
@@ -285,6 +287,23 @@ export class PiAdapter implements AgentAdapter {
    */
   async listModels(): Promise<AgentModelCatalog> {
     return readPiModelCatalog(this.ctx, this.agent, { env: this.storeEnv() })
+  }
+
+  /**
+   * Read the capability inventory from Pi's own configuration and resource directories.
+   * Read-only, and never throwing: an unreadable file or a withheld project tier is a
+   * declared gap in `notes`, not an error.
+   *
+   * @returns The inventory: built-in and extension tools, discovered skills, configured MCP
+   *   servers, prompt-template and built-in commands, and context-file paths.
+   */
+  async readCapabilities(): Promise<AgentCapabilityInventory> {
+    const layout = await this.layout()
+    return await readPiCapabilities(this.ctx.files, this.agent, {
+      agentDir: layout.agentDir,
+      cwd: process.cwd(),
+      env: this.storeEnv(),
+    })
   }
 
   /**
@@ -950,5 +969,7 @@ export type {
   PiLlmRegistrationOptions,
   PiLlmRoute,
 } from './llm.ts'
-export type { PiCatalogRead, PiDeclaredCredential, PiLlmDeclaration } from './models.ts'
+export type { PiCatalogRead, PiDeclaredCredential, PiLlmDeclaration, PiProjectTrustRead, PiProjectTrustOptions, ProjectTrust } from './models.ts'
+export type { PiCapabilitiesOptions } from './capabilities.ts'
+export { readPiCapabilities } from './capabilities.ts'
 export type { PiReadContext } from './sessions.ts'

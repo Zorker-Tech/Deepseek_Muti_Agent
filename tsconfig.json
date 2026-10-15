@@ -6,6 +6,7 @@
     { "path": "packages/adapter-codex" },
     { "path": "packages/adapter-grok" },
     { "path": "packages/adapter-pi" },
+    { "path": "packages/adapter-omp" },
     { "path": "packages/control-plane" },
     { "path": "packages/plugin" }
   ]

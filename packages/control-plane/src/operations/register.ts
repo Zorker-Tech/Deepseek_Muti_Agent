@@ -16,12 +16,15 @@ import {
   sessionKey as makeSessionKey,
   s,
   todoId as brandTodoId,
+  type AgentCapabilityInventory,
   type AgentPlan,
   type AgentTodo,
   type MeshWorkspace,
+  type ProjectionNote,
   type RunRecord,
   type TodoStatus,
 } from '@zorker/muti-agent-contracts'
+import { HARNESS_AGENT } from '@zorker/muti-agent-core'
 import {
   AgentParam,
   CollaborationParam,
@@ -62,6 +65,13 @@ export interface DiagnosticsReport {
     transports: readonly { mode: string, mechanism: string, available: boolean }[]
   }[]
   warnings: readonly string[]
+  /**
+   * Adapters that were compiled in but did not register, with the reason.
+   *
+   * Reported because a registry entry that fails silently is indistinguishable from an agent
+   * that is not installed — and the two need different fixes.
+   */
+  skippedAdapters: readonly { agentId: string, reason: string }[]
   /** Per-agent model-route registration, so a missing provider is diagnosable. */
   modelRoutes: readonly {
     agentId: string
@@ -71,9 +81,36 @@ export interface DiagnosticsReport {
   }[]
 }
 
+/** How a session's capability binding was resolved. */
+export type CapabilityBindingSource =
+  /** The session's own recorded choice. */
+  | 'session'
+  /** The operator's default agent, because the session records none. */
+  | 'preferred'
+  /** Neither exists: the harness's own agent answers this conversation. */
+  | 'harness'
+
+/** Result of `capabilities.for_session`. */
+export interface CapabilitiesForSessionResult {
+  /** The agent the session is bound to, or the reserved `harness`. */
+  agentId: string
+  /** The same binding, as one string to render: the session's choice, the default, or `harness`. */
+  bound: string
+  /** How that binding was resolved. */
+  source: CapabilityBindingSource
+  /**
+   * The bound agent's capability inventory.
+   *
+   * Absent only for the reserved `harness` binding; an agent this process cannot read still
+   * answers with an inventory, whose `notes` say why it is empty.
+   */
+  inventory?: AgentCapabilityInventory
+  /** Why there is no inventory, when there is none. */
+  notes?: readonly ProjectionNote[]
+}
+
 /** Result of `mcp.config`. */
-export interface McpConfigReport {
-  /** The stdio server command an MCP client should launch. */
+export interface McpConfigReport {  /** The stdio server command an MCP client should launch. */
   stdio: { command: string, args: readonly string[], env: Readonly<Record<string, string>> }
   /** The streamable HTTP endpoint, when the harness serves one. */
   http?: { url: string, headers?: Readonly<Record<string, string>> }
@@ -118,6 +155,8 @@ export interface RegistrationContext {
     notes: readonly string[]
     error?: string
   }[]
+  /** Adapters that failed to register, with the reason. */
+  skippedAdapters?: () => readonly { agentId: string, reason: string }[]
   /** Absolute path of the stdio MCP entry script, when the plugin knows it. */
   mcpEntry?: string
   /** Streamable HTTP endpoint, when the harness serves one. */
@@ -202,6 +241,7 @@ export function buildOperations(
         })),
         warnings,
         modelRoutes: context.modelRoutes?.() ?? [],
+        skippedAdapters: context.skippedAdapters?.() ?? [],
       }
     },
   })
@@ -945,6 +985,66 @@ export function buildOperations(
     run: async (ctx, params) => ({
       catalogs: await ctx.service.modelCatalogs(params.agentIds),
     }),
+  })
+
+  // ---------------------------------------------------------- capabilities ----
+
+  add({
+    id: 'capabilities.get',
+    summary:
+      'Read one agent\'s capability inventory: the tools, skills, MCP servers, commands and '
+      + 'context files its own configuration and resource directories declare.',
+    params: s.object({ agentId: AgentParam }),
+    scope: 'read',
+    danger: 'safe',
+    // Exposed as a tool: the harness agent can answer "what would Codex offer here?" without
+    // a GUI, and the panel reads the same operation.
+    exposeAsTool: true,
+    run: async (ctx, params) => ({
+      inventory: await ctx.service.capabilities(params.agentId),
+    }),
+  })
+
+  add({
+    id: 'capabilities.for_session',
+    summary:
+      'The agent one harness session is bound to, with its capability inventory. The reserved '
+      + '"harness" binding answers bound to "harness" without an inventory, because the '
+      + 'harness\'s own surfaces already describe it.',
+    params: s.object({
+      sessionId: s.string().min(1).describeAs('Harness session id, as the session controller names it.'),
+    }),
+    scope: 'read',
+    danger: 'safe',
+    // Panel-only: its answer is meaningful against one conversation, and a model-facing tool
+    // that answers about "the current session" would have to guess which one that is.
+    exposeAsTool: false,
+    run: async (ctx, params) => {
+      const preferences = await ctx.service.preferences()
+      const chosen = preferences.agentBySession?.[params.sessionId]
+      const agentId = chosen ?? preferences.preferredAgent ?? HARNESS_AGENT
+      const source: CapabilityBindingSource =
+        chosen !== undefined ? 'session' : preferences.preferredAgent !== undefined ? 'preferred' : 'harness'
+      if (agentId === HARNESS_AGENT) {
+        // Read through the service so the reserved id resolves in exactly one place, and
+        // carry its note beside the absent inventory.
+        const inventory = await ctx.service.capabilities(HARNESS_AGENT)
+        return {
+          agentId,
+          bound: agentId,
+          source,
+          notes: inventory.notes,
+        } satisfies CapabilitiesForSessionResult
+      }
+      // No separate notes member: an unreadable agent's reasons are already inside the
+      // inventory's own `notes`, which is where every reader of an inventory looks.
+      return {
+        agentId,
+        bound: agentId,
+        source,
+        inventory: await ctx.service.capabilities(agentId),
+      } satisfies CapabilitiesForSessionResult
+    },
   })
 
   // ----------------------------------------------------------- preferences ----

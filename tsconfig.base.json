@@ -38,6 +38,8 @@
       "@zorker/muti-agent-llm-bridge/*": ["./packages/llm-bridge/src/*"],
       "@zorker/muti-agent-adapter-codex": ["./packages/adapter-codex/src/index.ts"],
       "@zorker/muti-agent-adapter-grok": ["./packages/adapter-grok/src/index.ts"],
+      "@zorker/muti-agent-adapter-omp": ["./packages/adapter-omp/src/index.ts"],
+      "@zorker/muti-agent-adapter-omp/*": ["./packages/adapter-omp/src/*"],
       "@zorker/muti-agent-adapter-pi": ["./packages/adapter-pi/src/index.ts"],
       "@zorker/muti-agent-control-plane": ["./packages/control-plane/src/index.ts"],
       "@zorker/muti-agent-plugin": ["./packages/plugin/src/host/index.ts"]

@@ -20,6 +20,7 @@
 import type {
   AgentAuthState,
   AgentCapabilities,
+  AgentCapabilityInventory,
   AgentModelCatalog,
   AgentDescriptor,
   AgentMessage,
@@ -225,6 +226,21 @@ export interface AgentAdapter {
    *   catalog with a note rather than throwing.
    */
   listModels(): Promise<AgentModelCatalog>
+  /**
+   * Read this agent's capability inventory — the tools, skills, MCP servers, commands and
+   * context files it will offer in a session.
+   *
+   * Read from the agent's own configuration and resource directories. This is what lets a
+   * conversation's capability surfaces describe the agent it is bound to instead of the
+   * harness's own: the harness derives those surfaces from the session's composition, so the
+   * declarations have to be readable before they can be contributed.
+   *
+   * Read-only, and never throws: an agent that cannot enumerate a category returns an empty
+   * list with a `ProjectionNote` saying why, which is a different fact from "it has none".
+   *
+   * @returns The inventory.
+   */
+  readCapabilities(): Promise<AgentCapabilityInventory>
   /** Observed authentication state. Never returns secret material. */
   authStatus(): Promise<AgentAuthState>
   /** Start a credential flow through the native CLI. */
@@ -250,6 +266,7 @@ export function canonicalSessionKey(agentId: string, nativeId: string): string {
 export type {
   AgentAuthState,
   AgentCapabilities,
+  AgentCapabilityInventory,
   AgentModelCatalog,
   AgentDescriptor,
   AgentMessage,

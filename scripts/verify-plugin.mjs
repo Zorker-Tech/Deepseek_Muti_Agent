@@ -146,7 +146,10 @@ if (rpcRoute !== undefined) {
   const diagnostics = await rpc(rpcRoute, 'agents.diagnostics', {})
   check(diagnostics.body?.ok === true, 'agents.diagnostics succeeded', JSON.stringify(diagnostics.body)?.slice(0, 300))
   const agentRows = diagnostics.body?.result?.agents ?? []
-  check(agentRows.length === 3, 'three agents are described', agentRows.map(row => row.agentId).join(','))
+  check(agentRows.length === 4, 'four agents are described', agentRows.map(row => row.agentId).join(','))
+  for (const skip of diagnostics.body?.result?.skippedAdapters ?? []) {
+    notes.push(`skipped adapter ${skip.agentId}: ${skip.reason}`)
+  }
   const isolated = diagnostics.body?.result?.isolation
   check(isolated === 'worktree', 'isolation is reported as enabled', isolated)
   // The reported surfaces must be the effective ones. A stub context has no `inject`, so
@@ -179,7 +182,7 @@ if (rpcRoute !== undefined) {
   const refresh = await rpc(rpcRoute, 'sessions.refresh', {})
   check(refresh.body?.ok === true, 'sessions.refresh succeeded', JSON.stringify(refresh.body)?.slice(0, 300))
   const outcomes = refresh.body?.result?.outcomes ?? []
-  check(outcomes.length === 3, 'every agent was scanned', outcomes.length)
+  check(outcomes.length === 4, 'every agent was scanned', outcomes.length)
   notes.push(`scan: ${outcomes.map(o => `${o.agentId}=${o.ok ? String(o.found) : 'failed'}`).join(' ')}`)
 
   // A row limit must not change any partition's counts, only how many rows it shows.
@@ -196,14 +199,14 @@ if (rpcRoute !== undefined) {
   const partitions = await rpc(rpcRoute, 'sessions.partitions', { limit: 5 })
   check(partitions.body?.ok === true, 'sessions.partitions succeeded', JSON.stringify(partitions.body)?.slice(0, 300))
   const buckets = partitions.body?.result?.partitions ?? []
-  check(buckets.length === 3, 'one partition per agent', buckets.map(b => b.agentId).join(','))
+  check(buckets.length === 4, 'one partition per agent', buckets.map(b => b.agentId).join(','))
   const withNames = buckets.filter(bucket => typeof bucket.displayName === 'string' && bucket.displayName !== '')
-  check(withNames.length === 3, 'every partition carries a display name')
+  check(withNames.length === 4, 'every partition carries a display name')
 
   const credentials = await rpc(rpcRoute, 'credentials.list', {})
   check(credentials.body?.ok === true, 'credentials.list succeeded', JSON.stringify(credentials.body)?.slice(0, 300))
   const rows = credentials.body?.result?.credentials ?? []
-  check(rows.length === 3, 'a credential row per agent', rows.length)
+  check(rows.length === 4, 'a credential row per agent', rows.length)
   for (const row of rows) {
     check(typeof row.state?.status === 'string', `${row.agentId} reports a status`)
     check(row.state?.agentId !== undefined, `${row.agentId} credential row is canonical`)

@@ -45,6 +45,14 @@ export const ADAPTER_ENTRIES: readonly AdapterEntry[] = [
     },
   },
   {
+    id: 'omp',
+    displayName: 'oh-my-pi',
+    load: async service => {
+      const module = await import('@zorker/muti-agent-adapter-omp')
+      service.registerAdapter('omp', module.createOmpAdapter)
+    },
+  },
+  {
     id: 'pi',
     displayName: 'Pi',
     load: async service => {

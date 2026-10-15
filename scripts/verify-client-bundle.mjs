@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const bundlePath = join(root, 'packages', 'plugin', 'lib', 'client.js')
 const PACKAGE_NAME = '@zorker/muti-agent-plugin'
-const EXPECTED_SLOTS = ['sidebar.panellist', 'main', 'settings.section', 'shell.overlay', 'conversation.input.right']
+const EXPECTED_SLOTS = ['sidebar.panellist', 'main', 'settings.section', 'shell.overlay', 'conversation.input.right', 'sidebar.right.pane.tab']
 
 const failures = []
 const notes = []

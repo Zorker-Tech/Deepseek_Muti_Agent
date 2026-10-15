@@ -13,6 +13,7 @@
     { "path": "../adapter-codex" },
     { "path": "../adapter-grok" },
     { "path": "../adapter-pi" },
+    { "path": "../adapter-omp" },
     { "path": "../control-plane" }
   ]
 }

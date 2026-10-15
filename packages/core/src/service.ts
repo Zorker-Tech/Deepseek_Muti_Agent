@@ -20,7 +20,7 @@ import { SessionIndex } from './sessions/index.ts'
 import { StateStore, resolveStateRoot } from './state/store.ts'
 import { WorktreeManager, type WorktreeOptions } from './worktree/manager.ts'
 import { MutiAgentError, ErrorCodes } from '@zorker/muti-agent-contracts'
-import type { AgentModelCatalog } from '@zorker/muti-agent-contracts'
+import type { AgentCapabilityInventory, AgentModelCatalog } from '@zorker/muti-agent-contracts'
 import { CollaborationStore } from './orchestration/collaboration.ts'
 import { RunManager, type RunManagerOptions } from './orchestration/runs.ts'
 import { CredentialService } from './credentials/service.ts'
@@ -131,6 +131,34 @@ const DEFAULT_RUNS: RunManagerOptions = {
   maxParallel: 4,
   historyLimit: 200,
   shareContext: true,
+}
+
+/** Why the reserved harness binding has no foreign inventory to read. */
+export const HARNESS_INVENTORY_NOTE =
+  "the harness answers with its own agent, whose capability surfaces already describe it: the " +
+  'Trajectory "Tools" tab renders the tool catalog the agent loop logged for the session, and ' +
+  'the "/" menu resolves skills from the session\'s own composition'
+
+/**
+ * A capability inventory with nothing declared but the reason why, so "this agent cannot be
+ * enumerated" is never presented as "this agent declares nothing".
+ *
+ * @param agentId - The agent the inventory is about; it need not be registered.
+ * @param reason - Why there is nothing to show.
+ * @returns The noted empty inventory.
+ */
+function emptyInventory(agentId: string, reason: string): AgentCapabilityInventory {
+  return {
+    agentId: agentId as AgentCapabilityInventory['agentId'],
+    tools: [],
+    skills: [],
+    mcpServers: [],
+    commands: [],
+    contextFiles: [],
+    sources: [],
+    notes: [{ field: '*', reason }],
+    observedAt: new Date().toISOString(),
+  }
 }
 
 /** The assembled domain layer. */
@@ -302,6 +330,58 @@ export class MutiAgentService {
       }
     }
     return catalogs
+  }
+
+  /**
+   * The capability inventory for one agent.
+   *
+   * One read of the agent's own configuration and resource directories: the tools, skills,
+   * MCP servers, commands and context files it will offer in a session. A read failure, an
+   * agent this process does not carry, and the reserved {@link HARNESS_AGENT} all answer
+   * with an empty inventory carrying a `ProjectionNote` that says which of them it was —
+   * an unreadable agent must not hide the other agents, and "cannot enumerate" must stay
+   * distinguishable from "declares none".
+   *
+   * @param agentId - Canonical agent id, or the reserved `harness`.
+   * @returns The inventory; never throws.
+   */
+  async capabilities(agentId: string): Promise<AgentCapabilityInventory> {
+    if (agentId === HARNESS_AGENT) return emptyInventory(agentId, HARNESS_INVENTORY_NOTE)
+    const adapter = this.registry.get(agentId)
+    if (adapter === undefined) {
+      return emptyInventory(
+        agentId,
+        `agent "${agentId}" is not available in this process, so nothing of its own configuration could be read`,
+      )
+    }
+    try {
+      return await adapter.readCapabilities()
+    } catch (cause) {
+      this.log.warn(`reading the capability inventory for ${agentId} failed`, {
+        error: cause instanceof Error ? cause.message : String(cause),
+      })
+      return emptyInventory(
+        agentId,
+        `the capability inventory could not be read: ${cause instanceof Error ? cause.message : String(cause)}`,
+      )
+    }
+  }
+
+  /**
+   * The capability inventory for every requested agent, in registry order.
+   *
+   * Each agent's read degrades on its own, exactly like {@link modelCatalogs}: one agent
+   * with an unreadable configuration produces a noted empty inventory while the others
+   * answer in full.
+   *
+   * @param agentIds - Agents to read; omitted reads every registered agent.
+   * @returns One inventory per requested agent.
+   */
+  async capabilityInventories(agentIds?: readonly string[]): Promise<readonly AgentCapabilityInventory[]> {
+    const requested = agentIds ?? this.registry.ids()
+    const inventories: AgentCapabilityInventory[] = []
+    for (const agentId of requested) inventories.push(await this.capabilities(agentId))
+    return inventories
   }
 
   /**

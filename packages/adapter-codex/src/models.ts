@@ -133,7 +133,7 @@ const UNPROJECTED_MODEL_INFO_KEYS: readonly string[] = [
 const MAX_LISTED_KEYS = 20
 
 /** The role a configuration file played, which decides how it is folded. */
-type LayerKind = 'user' | 'profile' | 'project' | 'local'
+export type LayerKind = 'user' | 'profile' | 'project' | 'local'
 
 /** One parsed configuration layer, in ascending precedence order. */
 interface ConfigLayer {
@@ -198,6 +198,33 @@ export type CodexConfigFact =
   | ({ readonly kind: 'provider'; readonly providerId: string } & CodexProviderAuthFacts)
   | { readonly kind: 'selection'; readonly reasoningEffort: string }
 
+/** One configuration layer as the capability reader needs to see it. */
+export interface CodexConfigLayerFacts {
+  /** Absolute path of the file the layer came from. */
+  readonly path: string
+  /** Directory the layer's relative paths resolve against. */
+  readonly baseDir: string
+  /** Role the layer played in Codex's precedence chain. */
+  readonly kind: LayerKind
+  /** Parsed table, exactly as this read merged it. */
+  readonly table: TomlTable
+}
+
+/**
+ * The configuration facts a capability inventory needs beyond the model catalog.
+ *
+ * Produced by the same pass over the same layers that builds the catalog, so an
+ * inventory can never describe a configuration the catalog does not.
+ */
+export interface CodexCapabilityFacts {
+  /** Directory that stood in for the `$PWD` of a Codex invocation. */
+  readonly projectDir: string
+  /** Applied layers in ascending precedence order. */
+  readonly layers: readonly CodexConfigLayerFacts[]
+  /** The user layer's `[projects]` table, which decides project trust. */
+  readonly projects: TomlTable | undefined
+}
+
 /** Everything a catalog read needs. */
 export interface CodexModelCatalogRead {
   /** Read-only filesystem helpers. */
@@ -221,6 +248,15 @@ export interface CodexModelCatalogRead {
    * credential is the auth store, and `model_reasoning_effort` is the route default.
    */
   readonly onFact?: (fact: CodexConfigFact) => void
+  /**
+   * Optional consumer of the configuration layers this pass applied.
+   *
+   * The capability inventory is the consumer: `[mcp_servers]` is projected from the same
+   * layers, and the project-root and instruction-file keys (`project_root_markers`,
+   * `project_doc_fallback_filenames`) come from the merged non-project layers. Supplying
+   * a sink changes nothing about the catalog or about which files are read.
+   */
+  readonly collect?: (facts: CodexCapabilityFacts) => void
 }
 
 /**
@@ -423,6 +459,12 @@ export async function readCodexModelCatalog(read: CodexModelCatalogRead): Promis
   }
   for (const reason of declared) notes.push({ field: '*', reason })
 
+  read.collect?.({
+    projectDir,
+    layers: layers.map(layer => ({ path: layer.path, baseDir: layer.baseDir, kind: layer.kind, table: layer.table })),
+    projects,
+  })
+
   return {
     agentId: read.agentId,
     providers,
@@ -512,11 +554,14 @@ function ancestorDirs(from: string): readonly string[] {
  * repo-root fallbacks (both of which are ancestors of the directory). Trust recorded in
  * managed configuration is not read here.
  *
+ * Exported because the capability inventory applies the same trust rule to the project's
+ * instruction files and mcp servers, from the same `[projects]` table this read parsed.
+ *
  * @param projects - The user layer's `[projects]` table.
  * @param dir - Absolute directory to resolve trust for.
  * @returns The recorded `trust_level`, or `undefined` when no entry covers the directory.
  */
-function projectTrustLevel(projects: TomlTable | undefined, dir: string): string | undefined {
+export function projectTrustLevel(projects: TomlTable | undefined, dir: string): string | undefined {
   if (projects === undefined) return undefined
   let current = resolve(dir)
   for (;;) {

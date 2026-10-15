@@ -64,6 +64,8 @@ interface ActivationState {
   service: MutiAgentService | undefined
   /** Filled when the LLM surface mounts, read by the diagnostics operation. */
   modelRoutes: ModelRouteOutcome[]
+  /** Adapters this build carries that did not register, with the reason. */
+  skippedAdapters: { agentId: string, reason: string }[]
   gateway: Gateway | undefined
   disposers: (() => void | Promise<void>)[]
   timers: NodeJS.Timeout[]
@@ -92,6 +94,7 @@ export async function apply(
     timers: [],
     harness: undefined,
     modelRoutes: [],
+    skippedAdapters: [],
   }
   ACTIVATIONS.set(ctx as object, state)
 
@@ -168,6 +171,7 @@ export async function apply(
       .filter(([, settings]) => settings.enabled !== false)
       .map(([agentId]) => agentId),
   })
+  for (const skip of registration.skipped) state.skippedAdapters.push(skip)
   if (registration.skipped.length > 0) {
     ctx.logger?.warn?.(
       `muti-agent: ${String(registration.skipped.length)} adapter(s) skipped: ${registration.skipped
@@ -187,6 +191,7 @@ export async function apply(
     // Read at call time, not captured here: registration is reactive, so the effective
     // surfaces change after activation.
     modelRoutes: () => state.modelRoutes,
+    skippedAdapters: () => state.skippedAdapters,
     surfaces: () => {
       const mounted = new Set(surfaces.mounted)
       const missing: { service: string, disables: string }[] = []
@@ -376,6 +381,16 @@ async function registerAgentRoutes(
     return join(homedir(), ...fallback)
   }
   const targets: readonly { agentId: string, register: () => Promise<{ dispose: () => void, providers: readonly string[], notes: readonly string[] }> }[] = [
+    {
+      agentId: 'omp',
+      register: async () => {
+        const module = await import('@zorker/muti-agent-adapter-omp')
+        return await module.registerOmpLlm({ llm }, {
+          env: process.env,
+          agentDir: home('omp', 'PI_CODING_AGENT_DIR', ['.omp', 'agent']),
+        })
+      },
+    },
     {
       agentId: 'pi',
       register: async () => {

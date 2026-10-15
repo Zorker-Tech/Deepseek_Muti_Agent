@@ -56,6 +56,7 @@ export type RpcMethod =
   | 'collaborations.list'
   | 'todos.get'
   | 'credentials.list'
+  | 'credentials.status'
   | 'credentials.login'
   | 'credentials.logout'
   | 'agents.diagnostics'
@@ -63,6 +64,8 @@ export type RpcMethod =
   | 'preferences.get'
   | 'preferences.set'
   | 'models.list'
+  | 'capabilities.get'
+  | 'capabilities.for_session'
 
 /** Sort orders `sessions.list` and `sessions.partitions` accept. */
 export type SessionSort = 'updated' | 'created' | 'title'
@@ -740,6 +743,44 @@ export class RpcClient {
   }
 
   /**
+   * @param params - The agent whose inventory to read.
+   * @param options - Cancellation.
+   * @returns The agent's declared capabilities, with its own gaps in `notes`.
+   */
+  async capabilitiesGet(
+    params: { agentId: string },
+    options: RpcCallOptions = {},
+  ): Promise<CapabilityInventory> {
+    const result = await this.call<{ inventory: CapabilityInventory }>('capabilities.get', { ...params }, options)
+    return result.inventory
+  }
+
+  /**
+   * @param params - The harness session whose binding to resolve.
+   * @param options - Cancellation.
+   * @returns The bound agent, how the binding was resolved, and its inventory.
+   */
+  async capabilitiesForSession(
+    params: { sessionId: string },
+    options: RpcCallOptions = {},
+  ): Promise<SessionCapabilityBinding> {
+    return await this.call<SessionCapabilityBinding>('capabilities.for_session', { ...params }, options)
+  }
+
+  /**
+   * @param params - The agent whose sign-in state to read.
+   * @param options - Cancellation.
+   * @returns The agent's credential row, or none when the agent is unknown.
+   */
+  async credentialsStatus(
+    params: { agentId: string },
+    options: RpcCallOptions = {},
+  ): Promise<readonly CredentialRow[]> {
+    const result = await this.call<{ credentials: readonly CredentialRow[] }>('credentials.status', { ...params }, options)
+    return result.credentials
+  }
+
+  /**
    * @param params - Agent, and the native session id to resume.
    * @param options - Cancellation.
    * @returns The argv that opens the agent's own UI.
@@ -792,6 +833,84 @@ export interface ModelCatalog {
   readonly sources: readonly { readonly path: string; readonly present: boolean; readonly note?: string }[]
   readonly notes: readonly { readonly field: string; readonly reason: string }[]
   readonly observedAt: string
+}
+
+/** One tool an agent's own configuration declares. */
+export interface CapabilityTool {
+  /** Name as the agent's model sees it. */
+  readonly name: string
+  readonly description?: string
+  /** Where the tool is declared: `builtin`, `mcp`, `config`, `extension`, … */
+  readonly source: string
+  /** The agent's own approval tier for it, when it has one. */
+  readonly approval?: string
+  /** Whether the agent loads it only on demand rather than always. */
+  readonly discoverable?: boolean
+  /** Absolute path of the declaring file, for a custom or extension tool. */
+  readonly path?: string
+}
+
+/** One skill an agent's own resource directories declare. */
+export interface CapabilitySkill {
+  readonly name: string
+  readonly description?: string
+  readonly source: string
+  readonly path?: string
+  /** Whether the user can invoke it directly, as opposed to a model-only skill. */
+  readonly userInvocable?: boolean
+}
+
+/** One MCP server an agent is configured to reach. */
+export interface CapabilityMcpServer {
+  readonly name: string
+  /** `stdio`, `http`, `sse`, or `unknown` when the configuration does not say. */
+  readonly transport: string
+  /** Command line, for a stdio server. */
+  readonly command?: string
+  /** Endpoint, for an http or sse server. */
+  readonly url?: string
+  readonly enabled: boolean
+  readonly source: string
+}
+
+/** One command an agent exposes to its user. */
+export interface CapabilityCommand {
+  readonly name: string
+  readonly description?: string
+  readonly source: string
+}
+
+/**
+ * One agent's capability inventory, as `capabilities.get` reports it.
+ *
+ * Read from the agent's own configuration: an empty list with a `note` explaining why is a
+ * different fact from a list that is empty because the agent declares nothing.
+ */
+export interface CapabilityInventory {
+  readonly agentId: string
+  readonly tools: readonly CapabilityTool[]
+  readonly skills: readonly CapabilitySkill[]
+  readonly mcpServers: readonly CapabilityMcpServer[]
+  readonly commands: readonly CapabilityCommand[]
+  /** Instruction-file paths only; never their text. */
+  readonly contextFiles: readonly string[]
+  readonly sources: readonly { readonly path: string; readonly present: boolean; readonly note?: string }[]
+  readonly notes: readonly { readonly field: string; readonly reason: string }[]
+  readonly observedAt: string
+}
+
+/** What `capabilities.for_session` answers. */
+export interface SessionCapabilityBinding {
+  /** The agent the session is bound to, or the reserved `harness`. */
+  readonly agentId: string
+  /** The same binding, as one string to render. */
+  readonly bound: string
+  /** How the binding was resolved: the session's own choice, the operator default, or the harness. */
+  readonly source: 'session' | 'preferred' | 'harness'
+  /** The bound agent's inventory; absent only for the reserved `harness` binding. */
+  readonly inventory?: CapabilityInventory
+  /** Why there is no inventory, when there is none. */
+  readonly notes?: readonly { readonly field: string; readonly reason: string }[]
 }
 
 /** What `preferences.get` answers: the stored preferences plus which bindings have settled. */

@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import type {
   AgentAuthState,
   AgentCapabilities,
+  AgentCapabilityInventory,
   AgentDescriptor,
   AgentMessage,
   AgentModelCatalog,
@@ -46,6 +47,7 @@ import { GROK_MANAGED_ENV_KEYS, GrokAuthService } from './auth.ts'
 import { classifyGrokFailure, createStreamState, mapStreamingJsonLine } from './events.ts'
 import type { GrokStreamState } from './events.ts'
 import { readGrokModelCatalog } from './models.ts'
+import { readGrokCapabilities } from './capabilities.ts'
 import {
   findGrokSessionDir,
   listGrokSessions,
@@ -225,6 +227,37 @@ export class GrokAdapter implements AgentAdapter {
       cwd: process.cwd(),
       log: this.ctx.log,
     })
+  }
+
+  /**
+   * Read grok's capability inventory from its own configuration and resource directories.
+   *
+   * The configuration pass is the same one `listModels()` makes, so `[mcp_servers]`,
+   * `[skills]`, `[paths]` and `[compat]` here cannot describe a configuration the catalog
+   * does not. Tools and slash commands are the declaration tables grok keeps in code,
+   * embedded with per-row provenance (`src/capabilities.ts`); rule and instruction files are
+   * reported by path alone — never by content. Read-only throughout, and never throws.
+   *
+   * @returns The inventory.
+   */
+  async readCapabilities(): Promise<AgentCapabilityInventory> {
+    const { paths } = await this.detect()
+    const inventory = await readGrokCapabilities({
+      files: this.ctx.files,
+      paths,
+      hostEnv: process.env,
+      cwd: process.cwd(),
+      log: this.ctx.log,
+    })
+    this.ctx.log.debug('grok capability inventory read', {
+      tools: inventory.tools.length,
+      skills: inventory.skills.length,
+      mcpServers: inventory.mcpServers.length,
+      commands: inventory.commands.length,
+      contextFiles: inventory.contextFiles.length,
+      notes: inventory.notes.length,
+    })
+    return inventory
   }
 
   /**
@@ -843,4 +876,7 @@ export type {
   GrokLlmRegistrationOptions,
   GrokLlmRoute,
 } from './llm.ts'
-export type { GrokLlmFacts } from './models.ts'
+export type { GrokLlmFacts, GrokCapabilityFacts, GrokConfigTierFacts, GrokProjectConfigFacts, GrokRepoChain } from './models.ts'
+export { resolveGrokRepoChain } from './models.ts'
+export { readGrokCapabilities } from './capabilities.ts'
+export type { GrokCapabilityRead } from './capabilities.ts'

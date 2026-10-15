@@ -81,6 +81,41 @@ export interface GrokLlmFacts {
   customModelsEndpoint: boolean
 }
 
+/** One configuration tier as the capability reader needs to see it. */
+export interface GrokConfigTierFacts {
+  /** Absolute path of the file the tier read. */
+  readonly path: string
+  /** How the tier is described in `sources`. */
+  readonly label: string
+  /** Parsed top-level table, present only when the file was read whole and parsed. */
+  readonly table: Record<string, unknown> | undefined
+}
+
+/** One project `.grok/config.toml` as the capability reader needs to see it. */
+export interface GrokProjectConfigFacts {
+  /** Absolute path of the project configuration file. */
+  readonly path: string
+  /** Parsed top-level table, present only when the file was read whole and parsed. */
+  readonly table: Record<string, unknown> | undefined
+}
+
+/**
+ * The configuration facts a capability inventory needs beyond the model catalog.
+ *
+ * Produced by the same pass over the same files that builds the catalog, so an inventory can
+ * never describe a configuration the catalog does not.
+ */
+export interface GrokCapabilityFacts {
+  /** Directory that stood in for grok's `--cwd`. */
+  readonly cwd: string
+  /** The managed, user, overlay and requirements tiers that parsed, in ascending precedence. */
+  readonly configTiers: readonly GrokConfigTierFacts[]
+  /** Project `.grok/config.toml` files, repository root first. */
+  readonly projectConfigs: readonly GrokProjectConfigFacts[]
+  /** Repository root the chain stopped at, when the cwd is inside a repository. */
+  readonly gitRoot: string | undefined
+}
+
 /** Everything the catalog reader needs from its adapter. */
 export interface GrokModelReaderOptions {
   /** Read-only filesystem helpers; every read is bounded and tolerates a writer. */
@@ -95,6 +130,14 @@ export interface GrokModelReaderOptions {
   log: Logger
   /** Receives the LLM-relevant facts from this same read, when a caller needs them. */
   collect?: (facts: GrokLlmFacts) => void
+  /**
+   * Receives the configuration tiers and project files this read parsed.
+   *
+   * The capability inventory is the consumer: `[mcp_servers]`, `[skills]`, `[paths]` and
+   * `[compat]` are projected from this same pass. Supplying a sink changes nothing about the
+   * catalog or about which files are read.
+   */
+  collectCapabilities?: (facts: GrokCapabilityFacts) => void
 }
 
 /** The `[model.<id>]` fields this catalog projects, already narrowed to their types. */
@@ -165,6 +208,8 @@ export async function readGrokModelCatalog(options: GrokModelReaderOptions): Pro
   const { files, paths, hostEnv, log } = options
   const sources: ModelSourceFile[] = []
   const notes: ProjectionNote[] = []
+  const tiers: GrokConfigTierFacts[] = []
+  const projectConfigs: GrokProjectConfigFacts[] = []
   const merged: GrokCatalogLayer = {
     modelOverrides: new Map(),
     modelProviders: new Map(),
@@ -182,17 +227,18 @@ export async function readGrokModelCatalog(options: GrokModelReaderOptions): Pro
     { path: join(paths.home, 'config.toml'), label: 'user config' },
   ]
   for (const tier of baseTiers) {
-    await mergeTomlTier({ files, log, merged, notes, sources, path: tier.path, label: tier.label })
+    await mergeTomlTier({ files, log, merged, notes, sources, tiers, path: tier.path, label: tier.label })
   }
 
+  const chain = await resolveGrokRepoChain(files, options.cwd, hostEnv.HOME)
   const projectFiles = await projectConfigFiles({
     files,
-    cwd: options.cwd,
-    home: hostEnv.HOME,
+    chain,
     userConfigPath: join(paths.home, 'config.toml'),
   })
   for (const path of projectFiles) {
     const read = await readTomlSource(files, path, 'full')
+    projectConfigs.push({ path, table: read.raw })
     if (read.gap === true) {
       recordSource(sources, notes, log, path, read, 'project config')
       continue
@@ -214,14 +260,14 @@ export async function readGrokModelCatalog(options: GrokModelReaderOptions): Pro
     }
   }
 
-  const overlayNotes = await readOverlays({ files, hostEnv, cwd: options.cwd, log, merged, notes, sources })
+  const overlayNotes = await readOverlays({ files, hostEnv, cwd: options.cwd, log, merged, notes, sources, tiers })
 
   const requirementTiers = [
     { path: join(paths.home, 'requirements.toml'), label: 'user requirements' },
     { path: join(SYSTEM_GROK_DIR, 'requirements.toml'), label: 'system requirements' },
   ]
   for (const tier of requirementTiers) {
-    await mergeTomlTier({ files, log, merged, notes, sources, path: tier.path, label: tier.label })
+    await mergeTomlTier({ files, log, merged, notes, sources, tiers, path: tier.path, label: tier.label })
   }
   if (process.platform === 'darwin') {
     notes.push({
@@ -355,6 +401,13 @@ export async function readGrokModelCatalog(options: GrokModelReaderOptions): Pro
     customModelsEndpoint: merged.modelsBaseUrl !== undefined || nonBlank(hostEnv.GROK_MODELS_BASE_URL) !== undefined,
   })
 
+  options.collectCapabilities?.({
+    cwd: files.resolvePath(options.cwd),
+    configTiers: tiers,
+    projectConfigs,
+    gitRoot: chain.repositoryRoot,
+  })
+
   return {
     agentId: AGENT_ID,
     ...(defaultModel === undefined ? {} : { defaultModel }),
@@ -367,29 +420,48 @@ export async function readGrokModelCatalog(options: GrokModelReaderOptions): Pro
 }
 
 /**
- * Discover `.grok/config.toml` files from the repository root down to the cwd.
+ * One repository chain as grok's project discovery computes it.
  *
- * Mirrors `find_project_configs` in `xai-grok-permission-rules/src/project_config.rs`:
- * the walk stops at a `.git` directory or file; with no repository, only the cwd is
- * probed; the user config is excluded so `cwd == $HOME` is not a project overlay. A
- * home-directory repository is treated as no repository, as grok does.
- *
- * @param options - Probe, starting directory, host home and the user config path to exclude.
- * @returns Existing candidate paths, repository root first.
+ * `dirs` is in grok's own order: the repository root first, down to the working directory,
+ * or just the working directory when it is not inside a repository (a home-directory
+ * checkout counts as none). `repositoryRoot` names the directory whose `.git` stopped the
+ * walk, which is what the skill and rule walks treat as the top of the project.
  */
-async function projectConfigFiles(options: {
-  files: FileProbe
-  cwd: string
-  home: string | undefined
-  userConfigPath: string
-}): Promise<readonly string[]> {
-  const start = options.files.resolvePath(options.cwd)
-  const dirs: string[] = []
+export interface GrokRepoChain {
+  /** Directories to probe, repository root first. */
+  readonly dirs: readonly string[]
+  /** The directory whose `.git` (file or directory) ended the walk, when there was one. */
+  readonly repositoryRoot: string | undefined
+}
+
+/**
+ * Resolve the repository chain grok's project discovery walks.
+ *
+ * Mirrors `RepoDirChain::resolve` and `find_project_configs`
+ * (`xai-grok-permission-rules/src/repo.rs`, `project_config.rs`): the walk stops at a `.git`
+ * directory or file, a home-directory checkout is treated as no repository, and with no
+ * repository only the working directory is probed.
+ *
+ * Exported because the capability inventory walks the same chain for project skills and
+ * project rules, and two walks that disagree would describe two different projects.
+ *
+ * @param files - Read-only probe.
+ * @param cwd - Directory to start from.
+ * @param home - Host home, whose own checkout counts as no repository.
+ * @returns The chain in grok's order.
+ */
+export async function resolveGrokRepoChain(
+  files: FileProbe,
+  cwd: string,
+  home: string | undefined,
+): Promise<GrokRepoChain> {
+  const start = files.resolvePath(cwd)
+  const visited: string[] = []
   let current = start
   let gitRoot: string | undefined
   for (let depth = 0; depth < MAX_REPO_WALK; depth += 1) {
-    dirs.push(current)
-    if ((await options.files.isDirectory(join(current, '.git'))) || (await options.files.isFile(join(current, '.git')))) {
+    visited.push(current)
+    if ((await files.isDirectory(join(current, '.git'))) || (await files.isFile(join(current, '.git')))) {
       gitRoot = current
       break
     }
@@ -397,10 +469,25 @@ async function projectConfigFiles(options: {
     if (parent === current) break
     current = parent
   }
-  const home = options.home === undefined ? undefined : options.files.resolvePath(options.home)
-  const chain = gitRoot === undefined || (home !== undefined && gitRoot === home) ? [start] : [...dirs].reverse()
+  const resolvedHome = home === undefined ? undefined : files.resolvePath(home)
+  const isHomeCheckout = gitRoot !== undefined && resolvedHome !== undefined && gitRoot === resolvedHome
+  const dirs = gitRoot === undefined || isHomeCheckout ? [start] : [...visited].reverse()
+  return { dirs, repositoryRoot: isHomeCheckout ? undefined : gitRoot }
+}
+
+/**
+ * Discover `.grok/config.toml` files from the repository root down to the cwd.
+ *
+ * @param options - Probe, the precomputed repository chain and the user config path to exclude.
+ * @returns Existing candidate paths, repository root first.
+ */
+async function projectConfigFiles(options: {
+  files: FileProbe
+  chain: GrokRepoChain
+  userConfigPath: string
+}): Promise<readonly string[]> {
   const found: string[] = []
-  for (const dir of chain) {
+  for (const dir of options.chain.dirs) {
     const candidate = join(dir, '.grok', 'config.toml')
     if (candidate === options.userConfigPath) continue
     if (await options.files.isFile(candidate)) found.push(candidate)
@@ -415,12 +502,14 @@ async function mergeTomlTier(options: {
   merged: GrokCatalogLayer
   notes: ProjectionNote[]
   sources: ModelSourceFile[]
+  tiers: GrokConfigTierFacts[]
   path: string
   label: string
 }): Promise<void> {
   const read = await readTomlSource(options.files, options.path, 'full')
   recordSource(options.sources, options.notes, options.log, options.path, read, options.label)
   if (read.layer !== undefined) mergeLayer(options.merged, read.layer)
+  options.tiers.push({ path: options.path, label: options.label, table: read.raw })
 }
 
 /**
@@ -442,6 +531,7 @@ async function readOverlays(options: {
   merged: GrokCatalogLayer
   notes: ProjectionNote[]
   sources: ModelSourceFile[]
+  tiers: GrokConfigTierFacts[]
 }): Promise<readonly string[]> {
   const { files, hostEnv } = options
   const caveats: string[] = []
@@ -456,6 +546,7 @@ async function readOverlays(options: {
       note: 'inline JSON overlay from the environment; not a filesystem path',
     }
     recordSource(options.sources, options.notes, options.log, 'GROK_CONFIG', recorded, 'inline JSON overlay from the environment')
+    options.tiers.push({ path: 'GROK_CONFIG', label: 'inline JSON overlay from the environment', table: read.raw })
     if (read.layer !== undefined) {
       mergeLayer(options.merged, read.layer)
       used = true
@@ -465,6 +556,7 @@ async function readOverlays(options: {
     const path = files.resolvePath(pathValue, options.cwd)
     const read = await readOverlayFile(files, path)
     recordSource(options.sources, options.notes, options.log, path, read, 'overlay file named by GROK_CONFIG_PATH')
+    options.tiers.push({ path, label: 'overlay file named by GROK_CONFIG_PATH', table: read.raw })
     if (read.layer !== undefined) {
       mergeLayer(options.merged, read.layer)
       used = true
