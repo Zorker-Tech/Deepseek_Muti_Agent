@@ -422,6 +422,14 @@ export function buildOperations(
     danger: 'safe',
     exposeAsTool: true,
     run: async (ctx, params) => {
+      // A model the caller names wins; otherwise the operator's recorded preference for this
+      // agent applies. Without this the preference was stored, shown in the UI and never used —
+      // a setting that silently did nothing.
+      let model = params.model
+      if (model === undefined) {
+        const preferences = await ctx.service.preferences()
+        model = preferences.preferredModelByAgent?.[params.agentId]
+      }
       const result = await ctx.service.runs.dispatch({
         agentId: params.agentId,
         prompt: params.prompt,
@@ -429,14 +437,17 @@ export function buildOperations(
         ...(params.collaborationId === undefined ? {} : { collaborationId: params.collaborationId }),
         ...(params.isolation === undefined ? {} : { isolation: params.isolation as 'worktree' | 'shared-cwd' }),
         ...(params.resumeNativeId === undefined ? {} : { resumeNativeId: params.resumeNativeId }),
-        ...(params.model === undefined ? {} : { model: params.model }),
+        ...(model === undefined ? {} : { model }),
         ...(params.sandbox === undefined ? {} : { sandbox: params.sandbox }),
         ...(params.approval === undefined ? {} : { approval: params.approval }),
         ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
         ...(params.env === undefined ? {} : { env: params.env }),
         requestedBy: params.requestedBy ?? ctx.actor.id,
       })
-      return { run: result.record }
+      // Reported back so a caller can tell the recorded preference from its own parameter.
+      return params.model === undefined && model !== undefined
+        ? { run: result.record, modelFromPreference: model }
+        : { run: result.record }
     },
   })
 

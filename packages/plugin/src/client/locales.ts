@@ -18,6 +18,7 @@ export const LOCALE_NS = 'mutiagent'
 export const zh = {
   'common.loading': '加载中…',
   'common.errorLabel': '错误',
+  'menu.fromAgent': '来自 {name}',
   'caps.panel': '能力',
   'caps.agent': '智能体',
   'caps.tools': '工具',
@@ -337,6 +338,7 @@ export type MessageKey = keyof typeof zh
 export const en: Readonly<Record<MessageKey, string>> = {
   'common.loading': 'Loading…',
   'common.errorLabel': 'Error',
+  'menu.fromAgent': 'from {name}',
   'caps.panel': 'Capabilities',
   'caps.agent': 'Agent',
   'caps.tools': 'Tools',

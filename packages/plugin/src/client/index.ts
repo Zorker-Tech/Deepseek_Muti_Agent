@@ -24,6 +24,7 @@ import { ToastStack } from './components/Toast.tsx'
 import { RENDER_CAP, SessionsView } from './views/SessionsView.tsx'
 import { MeshView } from './views/MeshView.tsx'
 import { AgentSelect } from './views/AgentSelect.tsx'
+import { registerAgentMenuSource } from './menu-source.ts'
 import { SettingsSection } from './views/SettingsSection.tsx'
 import { CapabilitiesBody } from './views/CapabilitiesPanel.tsx'
 import { CapabilitiesPage } from './views/CapabilitiesPage.tsx'
@@ -379,6 +380,9 @@ export function apply(ctx: ClientContext): SlotDisposer {
   ]
 
   registerCapabilitiesTabType(ctx)
+  // The harness's own `/` menu gains a group carrying the bound agent's skills; the group is
+  // ours, per conversation, and replaces nothing.
+  registerAgentMenuSource(ctx, api)
 
   return () => {
     for (const dispose of disposers) dispose()
