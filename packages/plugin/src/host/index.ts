@@ -99,13 +99,20 @@ export async function apply(
     }
   }
   // The harness session store is how the plugin knows whether a conversation has begun; the
-  // domain layer cannot reach it. Read structurally: a session with at least one event has
-  // started, and a store that is absent leaves the stricter default in place.
-  const sessionsService = ctx.get('sessions') as
-    | { get?(id: string): { events?: readonly unknown[] } | undefined }
-    | undefined
+  // domain layer cannot reach it.
+  //
+  // The lookup happens **per call**, never once at activation: `sessions` is frequently not
+  // yet registered while `apply` runs, and a snapshot taken then would be permanently
+  // `undefined` — which reads as "every session has started" and locks the agent switcher in
+  // every conversation. The same eager-capture mistake was already fixed for the tools,
+  // commands and connection surfaces by registering them reactively.
   const sessionActivity = (sessionId: string): boolean => {
-    const session = sessionsService?.get?.(sessionId)
+    const sessions = ctx.get('sessions') as
+      | { get?(id: string): { events?: readonly unknown[] } | undefined }
+      | undefined
+    const session = sessions?.get?.(sessionId)
+    // A store or entry this process cannot see cannot answer the question, so the stricter
+    // answer stands: an unknown session counts as started.
     if (session === undefined) return true
     return Array.isArray(session.events) && session.events.length > 0
   }
